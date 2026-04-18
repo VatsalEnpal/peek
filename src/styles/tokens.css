@@ -1,0 +1,83 @@
+/*
+ * peek-trace design tokens — see docs/design/DESIGN.md for rationale.
+ * Single source of truth; every component reads from here.
+ */
+
+:root {
+  /* palette */
+  --peek-bg: #0c0d10;
+  --peek-surface: #14161b;
+  --peek-surface-2: #1b1e25;
+  --peek-border: #242832;
+  --peek-fg: #e6e8ec;
+  --peek-fg-dim: #8b92a0;
+  --peek-fg-faint: #565c6a;
+  --peek-accent: #ffb454;
+  --peek-ok: #7fc97f;
+  --peek-warn: #e6c260;
+  --peek-bad: #e86a6a;
+
+  /* type */
+  --peek-font-sans:
+    'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --peek-font-mono:
+    'IBM Plex Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --peek-fs-xs: 11px;
+  --peek-fs-sm: 12px;
+  --peek-fs-md: 13px;
+  --peek-fs-lg: 15px;
+  --peek-fs-xl: 20px;
+
+  /* spacing — 4 px rhythm */
+  --peek-sp-1: 4px;
+  --peek-sp-2: 8px;
+  --peek-sp-3: 12px;
+  --peek-sp-4: 16px;
+  --peek-sp-6: 24px;
+  --peek-sp-8: 32px;
+
+  /* layout */
+  --peek-topbar-h: 44px;
+  --peek-inspector-w: 420px;
+  --peek-border-w: 1px;
+}
+
+html,
+body {
+  background: var(--peek-bg);
+  color: var(--peek-fg);
+  font-family: var(--peek-font-sans);
+  font-size: var(--peek-fs-md);
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:focus-visible,
+[role='button']:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--peek-accent);
+  outline-offset: 2px;
+}
+
+.peek-mono,
+.peek-num {
+  font-family: var(--peek-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.peek-dim {
+  color: var(--peek-fg-dim);
+}
+.peek-faint {
+  color: var(--peek-fg-faint);
+}
