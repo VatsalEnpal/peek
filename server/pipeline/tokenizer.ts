@@ -212,3 +212,128 @@ async function safeReadText(res: Response): Promise<string> {
     return '<no body>';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Offline tokenizer fallback
+//
+// Uses `@anthropic-ai/tokenizer` (tiktoken-backed Claude BPE) when available.
+// On any init/runtime failure (e.g. WASM load error), falls through to a
+// coarse char-estimate `Math.ceil(content.length / 3.5)` — good enough to
+// keep the pipeline moving when A2's 2% drift gate is known to fail anyway.
+// ---------------------------------------------------------------------------
+
+type OfflineCounter = (text: string) => number;
+
+let _offlineCounterCache: OfflineCounter | null = null;
+let _offlineCounterLoaded = false;
+
+function getOfflineCounter(): OfflineCounter {
+  if (_offlineCounterLoaded) {
+    return _offlineCounterCache ?? charEstimate;
+  }
+  _offlineCounterLoaded = true;
+  try {
+    // Use a dynamic require to avoid ESM/CJS headaches and so a module-load
+    // failure (missing WASM, etc.) degrades gracefully instead of crashing.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('@anthropic-ai/tokenizer') as { countTokens?: (t: string) => number };
+    if (typeof mod.countTokens === 'function') {
+      // Smoke-test once so a runtime WASM issue surfaces here and we fall back.
+      const probe = mod.countTokens('hi');
+      if (typeof probe === 'number' && probe >= 0) {
+        _offlineCounterCache = (text: string) => (text.length === 0 ? 0 : mod.countTokens!(text));
+        return _offlineCounterCache;
+      }
+    }
+  } catch {
+    // fall through to char-estimate
+  }
+  _offlineCounterCache = charEstimate;
+  return _offlineCounterCache;
+}
+
+function charEstimate(text: string): number {
+  if (text.length === 0) return 0;
+  // Claude rough char-per-token ratio ~3.5 (see task-2.2 context pack).
+  return Math.ceil(text.length / 3.5);
+}
+
+/** Test helper: reset the offline tokenizer cache (re-probes on next call). */
+export function _resetOfflineCounter(): void {
+  _offlineCounterCache = null;
+  _offlineCounterLoaded = false;
+}
+
+/**
+ * Count tokens offline. Never throws on tokenizer init — falls through to a
+ * character-based approximation if the real tokenizer is unavailable.
+ */
+export async function countTokensOffline(content: string): Promise<number> {
+  if (content.length === 0) return 0;
+  const counter = getOfflineCounter();
+  try {
+    const n = counter(content);
+    if (typeof n === 'number' && Number.isFinite(n) && n >= 0) {
+      return Math.ceil(n);
+    }
+  } catch {
+    // tokenizer blew up at runtime — fall back.
+  }
+  return charEstimate(content);
+}
+
+// ---------------------------------------------------------------------------
+// Top-level dispatcher
+// ---------------------------------------------------------------------------
+
+export type TokenResult = {
+  tokens: number;
+  method: 'api' | 'offline';
+  /** True when method === 'offline' — UI surfaces a drift warning. */
+  driftDisclaimer: boolean;
+};
+
+export type DispatcherOpts = CountTokensOpts & {
+  /** Skip the API path entirely and use the offline tokenizer. */
+  forceOffline?: boolean;
+};
+
+/**
+ * Top-level token count dispatcher.
+ *
+ * - If `forceOffline` is true → offline.
+ * - Else if an API key is available (via `opts.apiKey` or `ANTHROPIC_API_KEY`)
+ *   AND a fetch implementation is reachable → try the API. On any failure,
+ *   gracefully degrade to offline.
+ * - Else → offline.
+ *
+ * Always resolves; never throws on network errors.
+ */
+export async function countTokens(
+  content: string,
+  opts: DispatcherOpts = {}
+): Promise<TokenResult> {
+  const offlineResult = async (): Promise<TokenResult> => ({
+    tokens: await countTokensOffline(content),
+    method: 'offline',
+    driftDisclaimer: true,
+  });
+
+  if (opts.forceOffline) return offlineResult();
+
+  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  if (!apiKey || !fetchImpl) return offlineResult();
+
+  try {
+    const n = await countTokensViaAPI(content, {
+      ...opts,
+      apiKey,
+      fetchImpl,
+    });
+    return { tokens: n, method: 'api', driftDisclaimer: false };
+  } catch {
+    // Any API failure (network, 4xx, retries exhausted) → offline fallback.
+    return offlineResult();
+  }
+}

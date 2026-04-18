@@ -7,6 +7,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   countTokensViaAPI,
+  countTokensOffline,
+  countTokens,
   _clearTokenCache,
   _cacheSize,
   _resetRateLimiter,
@@ -239,5 +241,79 @@ describe('countTokensViaAPI', () => {
       await countTokensViaAPI(`unique-${i}`, { apiKey: 'k', fetchImpl: fetchImpl as any });
     }
     expect(_cacheSize()).toBe(25);
+  });
+});
+
+describe('countTokensOffline', () => {
+  it('returns a positive integer for a non-empty string', async () => {
+    const n = await countTokensOffline('hello world');
+    expect(typeof n).toBe('number');
+    expect(Number.isInteger(n)).toBe(true);
+    expect(n).toBeGreaterThan(0);
+  });
+
+  it('is deterministic: same input → same count', async () => {
+    const a = await countTokensOffline('The quick brown fox jumps over the lazy dog.');
+    const b = await countTokensOffline('The quick brown fox jumps over the lazy dog.');
+    expect(a).toBe(b);
+  });
+
+  it('returns 0 for empty string', async () => {
+    const n = await countTokensOffline('');
+    expect(n).toBe(0);
+  });
+});
+
+describe('countTokens dispatcher', () => {
+  beforeEach(() => {
+    _clearTokenCache();
+    _resetRateLimiter();
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to offline when no API key is available', async () => {
+    const result = await countTokens('x');
+    expect(result.method).toBe('offline');
+    expect(result.driftDisclaimer).toBe(true);
+    expect(result.tokens).toBeGreaterThan(0);
+  });
+
+  it('uses the API when an apiKey and fetchImpl are provided', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(mockResponse({ input_tokens: 123 }));
+    const result = await countTokens('x', {
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as any,
+    });
+    expect(result.method).toBe('api');
+    expect(result.driftDisclaimer).toBe(false);
+    expect(result.tokens).toBe(123);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('gracefully degrades to offline when API fetch throws', async () => {
+    const failFetch = vi.fn().mockRejectedValue(new Error('ENETUNREACH'));
+    const result = await countTokens('x', {
+      apiKey: 'test-key',
+      fetchImpl: failFetch as any,
+    });
+    expect(result.method).toBe('offline');
+    expect(result.driftDisclaimer).toBe(true);
+    expect(result.tokens).toBeGreaterThan(0);
+  });
+
+  it('honors forceOffline even when apiKey is present', async () => {
+    const fetchImpl = vi.fn();
+    const result = await countTokens('hello', {
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as any,
+      forceOffline: true,
+    });
+    expect(result.method).toBe('offline');
+    expect(result.driftDisclaimer).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

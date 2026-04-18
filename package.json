@@ -45,6 +45,7 @@
     "license-check": "license-checker --production --failOn 'GPL;AGPL;SSPL;Elastic-2.0;BSL'"
   },
   "dependencies": {
+    "@anthropic-ai/tokenizer": "^0.0.4",
     "express": "^5.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
