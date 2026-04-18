@@ -7,7 +7,7 @@ import type { ReactElement } from 'react';
  * Rows out of focus range render dimmed via `style.opacity`.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
 import type { SpanEvent } from '../stores/session';
 import { useSelectionStore } from '../stores/selection';

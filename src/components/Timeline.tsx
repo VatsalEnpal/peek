@@ -84,6 +84,7 @@ export function Timeline(): ReactElement {
           expanded={expanded.has(r.id)}
           selected={selectedSpanId === r.id}
           tokens={tokensBySpan.get(r.id) ?? null}
+          inRange={true}
           onSelect={(): void => selectSpan(r.id)}
           onToggleExpand={(): void => toggleExpand(r.id)}
         />

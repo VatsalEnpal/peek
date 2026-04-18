@@ -245,6 +245,8 @@ async function precomputeTokens(
 // plaintext within a session, and the plaintext never lands in the Store.
 // ---------------------------------------------------------------------------
 
+// @ts-expect-error — staged for post-v0.1 refactor; keep for reference.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function precomputeRedactions(
   blocks: ContentBlockInfo[],
   rawLines: string[],
