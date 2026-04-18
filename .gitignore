@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.peek/
+.peek-build/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+.vite/
+.turbo/
+
+# never commit user data
+~/.peek/

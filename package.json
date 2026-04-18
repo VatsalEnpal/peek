@@ -1,0 +1,65 @@
+{
+  "name": "peek-trace",
+  "version": "0.0.1",
+  "description": "Local trace viewer for Claude Code sessions. See what your agents actually loaded.",
+  "license": "Apache-2.0",
+  "author": "Vatsal Bhatt",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VatsalEnpal/peek-trace.git"
+  },
+  "keywords": [
+    "claude-code",
+    "ai-agents",
+    "trace-viewer",
+    "observability",
+    "devtools"
+  ],
+  "main": "dist/bin/peek.js",
+  "bin": {
+    "peek": "./dist/bin/peek.js"
+  },
+  "files": [
+    "dist/",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build:web": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build": "npm run build:server && npm run build:web",
+    "start": "node dist/bin/peek.js serve",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:acceptance": "vitest run tests/acceptance",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "license-check": "license-checker --production --failOn 'GPL;AGPL;SSPL;Elastic-2.0;BSL'"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "license-checker": "^25.0.1",
+    "prettier": "^3.4.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.0"
+  }
+}

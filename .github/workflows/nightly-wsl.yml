@@ -1,0 +1,25 @@
+name: Nightly WSL
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  wsl-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Ubuntu-22.04
+      - name: Install Node 22 in WSL
+        shell: wsl-bash {0}
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+      - name: Install + test
+        shell: wsl-bash {0}
+        run: |
+          npm ci
+          SKIP_DOCKER_TESTS=1 npm test
