@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { detectSecrets } from './secretlint-adapter';
 
 /** 64-char hex random salt per session. */
 export function createSessionSalt(): string {
@@ -41,4 +42,113 @@ export function detectEnvVars(content: string): EnvVarMatch[] {
     out.push({ start: byteStart, end: byteEnd, varName, value });
   }
   return out;
+}
+
+/**
+ * Unified detection emitted by {@link redactBlock}. `start`/`end` are UTF-8
+ * byte offsets within the *content* string that was passed in. `hash` is the
+ * 8-char HMAC prefix of the matched value (see {@link hashSecret}).
+ */
+export type Detection = {
+  start: number;
+  end: number;
+  hash: string;
+  pattern: string;
+};
+
+/**
+ * Location of a redacted block within its source JSONL line.
+ * `byteStart`/`byteEnd` describe where the raw (pre-redaction) content lived
+ * inside `lineBytes`; `sourceLineHash` is SHA-256 of the whole line and lets
+ * downstream consumers verify the block came from an unchanged source.
+ */
+export type SourceOffset = {
+  file: string;
+  byteStart: number;
+  byteEnd: number;
+  sourceLineHash: string;
+};
+
+export type RedactResult = {
+  redacted: string;
+  detections: Detection[];
+  sourceOffset: SourceOffset;
+};
+
+type RawDetection = {
+  start: number;
+  end: number;
+  matched: string;
+  pattern: string;
+};
+
+/**
+ * Orchestrate all detectors over `content`, emitting a redacted copy where
+ * every secret byte range has been replaced with `<secret:<8hex>>`.
+ *
+ * - Runs {@link detectSecrets} (Anthropic + AWS) and {@link detectEnvVars}.
+ * - Overlapping hits are deduped (earliest start wins; ties break by longest).
+ * - Byte-accurate replacement via Buffer slicing so multi-byte (emoji) input
+ *   is preserved exactly.
+ * - `sourceOffset.sourceLineHash` = SHA-256 of the full source JSONL line.
+ */
+export function redactBlock(
+  content: string,
+  salt: string,
+  sourceFile: string,
+  lineBytes: Buffer,
+  contentByteRangeInLine: { start: number; end: number }
+): RedactResult {
+  const secrets = detectSecrets(content).map<RawDetection>((s) => ({
+    start: s.start,
+    end: s.end,
+    matched: s.matched,
+    pattern: s.pattern,
+  }));
+  const envVars = detectEnvVars(content).map<RawDetection>((e) => ({
+    start: e.start,
+    end: e.end,
+    matched: e.value,
+    pattern: `env:${e.varName}`,
+  }));
+
+  // Sort by start asc, length desc; drop any whose start falls inside the
+  // previous kept range so overlapping hits don't get redacted twice.
+  const merged = [...secrets, ...envVars].sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    return b.end - a.end;
+  });
+  const deduped: RawDetection[] = [];
+  let prevEnd = -1;
+  for (const d of merged) {
+    if (d.start < prevEnd) continue;
+    deduped.push(d);
+    prevEnd = d.end;
+  }
+
+  // Walk byte-by-byte, splicing `<secret:<hash>>` in place of each matched range.
+  const contentBuf = Buffer.from(content, 'utf8');
+  const parts: Buffer[] = [];
+  const detections: Detection[] = [];
+  let cursor = 0;
+  for (const d of deduped) {
+    const hash = hashSecret(d.matched, salt);
+    parts.push(contentBuf.subarray(cursor, d.start));
+    parts.push(Buffer.from(`<secret:${hash}>`, 'utf8'));
+    cursor = d.end;
+    detections.push({ start: d.start, end: d.end, hash, pattern: d.pattern });
+  }
+  parts.push(contentBuf.subarray(cursor));
+  const redacted = Buffer.concat(parts).toString('utf8');
+
+  return {
+    redacted,
+    detections,
+    sourceOffset: {
+      file: sourceFile,
+      byteStart: contentByteRangeInLine.start,
+      byteEnd: contentByteRangeInLine.end,
+      sourceLineHash: sourceLineHash(lineBytes.toString('utf8')),
+    },
+  };
 }
