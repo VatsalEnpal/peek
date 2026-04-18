@@ -12,6 +12,9 @@
  * immediately to prevent silent reads of an incompatible layout.
  */
 
+import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
 import Database, { type Database as BetterSqliteDatabase, type Statement } from 'better-sqlite3';
 
 export const SCHEMA_VERSION = '1';
@@ -341,10 +344,29 @@ export class Store {
   };
 
   constructor(dbPath: string) {
-    this.db = new Database(dbPath);
+    // Accept three shapes:
+    //   - ':memory:' → in-memory DB, passed through verbatim.
+    //   - path ending in '.db' → used as the SQLite file path directly.
+    //   - anything else → treated as a directory that should contain 'store.db'.
+    //     The directory is created on demand so callers can pass an arbitrary
+    //     dataDir from tests/config without pre-creating it.
+    let resolved = dbPath;
+    if (dbPath !== ':memory:') {
+      const looksLikeDbFile = dbPath.endsWith('.db');
+      const existsAsDir = existsSync(dbPath) && statSync(dbPath).isDirectory();
+      if (!looksLikeDbFile || existsAsDir) {
+        // Treat as directory.
+        if (!existsSync(dbPath)) {
+          mkdirSync(dbPath, { recursive: true });
+        }
+        resolved = join(dbPath, 'store.db');
+      }
+    }
+
+    this.db = new Database(resolved);
 
     // WAL is unavailable for in-memory DBs; skip there to avoid noisy warnings.
-    if (dbPath !== ':memory:') {
+    if (resolved !== ':memory:') {
       this.db.pragma('journal_mode = WAL');
     }
     this.db.pragma('foreign_keys = ON');
@@ -581,5 +603,66 @@ export class Store {
     }
 
     return events;
+  }
+
+  /**
+   * Concatenate every user-visible text field across all tables into one big
+   * string. Used by acceptance tests (A4) to grep the on-disk store for
+   * plaintext secrets and/or `<secret:…>` markers without having to reason
+   * about SQL.
+   *
+   * This is intentionally a diagnostic dump, not a stable export format —
+   * field order and separators are not part of the contract.
+   */
+  dumpAsText(): string {
+    const parts: string[] = [];
+
+    const sessions = this.db.prepare(`SELECT * FROM sessions`).all() as SessionDbRow[];
+    for (const s of sessions) {
+      parts.push(s.id);
+      if (s.slug) parts.push(s.slug);
+      if (s.cwd) parts.push(s.cwd);
+      if (s.git_branch) parts.push(s.git_branch);
+      if (s.cc_version) parts.push(s.cc_version);
+      if (s.entrypoint) parts.push(s.entrypoint);
+      if (s.first_prompt) parts.push(s.first_prompt);
+      if (s.metadata_json) parts.push(s.metadata_json);
+    }
+
+    const turns = this.db.prepare(`SELECT * FROM turns`).all() as Array<{
+      id: string;
+      usage_json: string | null;
+    }>;
+    for (const t of turns) {
+      parts.push(t.id);
+      if (t.usage_json) parts.push(t.usage_json);
+    }
+
+    const spans = this.db.prepare(`SELECT * FROM action_spans`).all() as SpanDbRow[];
+    for (const sp of spans) {
+      parts.push(sp.id);
+      if (sp.name) parts.push(sp.name);
+      if (sp.inputs_json) parts.push(sp.inputs_json);
+      if (sp.outputs_json) parts.push(sp.outputs_json);
+      if (sp.metadata_json) parts.push(sp.metadata_json);
+    }
+
+    const ledger = this.db.prepare(`SELECT * FROM ledger_entries`).all() as LedgerDbRow[];
+    for (const l of ledger) {
+      parts.push(l.id);
+      if (l.source) parts.push(l.source);
+      if (l.content_redacted) parts.push(l.content_redacted);
+      if (l.source_offset_json) parts.push(l.source_offset_json);
+    }
+
+    const bookmarks = this.db.prepare(`SELECT * FROM bookmarks`).all() as BookmarkDbRow[];
+    for (const b of bookmarks) {
+      parts.push(b.id);
+      if (b.label) parts.push(b.label);
+      if (b.source) parts.push(b.source);
+      if (b.metadata_json) parts.push(b.metadata_json);
+    }
+
+    return parts.join('\n');
   }
 }
