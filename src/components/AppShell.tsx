@@ -11,12 +11,15 @@ import { useEffect, useMemo } from 'react';
 
 import { useSessionStore, buildTimelineRows } from '../stores/session';
 import { useSelectionStore } from '../stores/selection';
+import { useRecordingStore } from '../stores/recording';
 import { bindKeyboard, type KbAction } from '../lib/keyboard';
 import { SessionPicker } from './SessionPicker';
 import { FilterChips } from './FilterChips';
 import { Timeline } from './Timeline';
 import { Inspector } from './Inspector';
 import { KbHelp } from './KbHelp';
+import { RecordButton } from './RecordButton';
+import { FocusBar } from './FocusBar';
 
 export function AppShell(): ReactElement {
   const fetchSessions = useSessionStore((s) => s.fetchSessions);
@@ -52,7 +55,13 @@ export function AppShell(): ReactElement {
     };
     const handler = (a: KbAction): void => {
       const rows = getRows();
-      if (rows.length === 0 && a.kind !== 'toggle-help' && a.kind !== 'close') return;
+      if (
+        rows.length === 0 &&
+        a.kind !== 'toggle-help' &&
+        a.kind !== 'close' &&
+        a.kind !== 'toggle-record'
+      )
+        return;
       switch (a.kind) {
         case 'next': {
           const i = currentIndex(rows);
@@ -92,6 +101,20 @@ export function AppShell(): ReactElement {
         case 'toggle-help':
           toggleHelp();
           break;
+        case 'toggle-record': {
+          const rec = useRecordingStore.getState();
+          const sessionId = useSessionStore.getState().selectedSessionId;
+          if (rec.isRecording) {
+            void rec.stopRecording();
+          } else if (sessionId) {
+            const raw =
+              typeof window !== 'undefined' && typeof window.prompt === 'function'
+                ? window.prompt('Label this recording:', '')
+                : '';
+            void rec.startRecording(sessionId, (raw ?? '').trim());
+          }
+          break;
+        }
       }
     };
     return bindKeyboard(handler);
@@ -139,7 +162,7 @@ export function AppShell(): ReactElement {
         </div>
         <div style={{ width: 1, height: 18, background: 'var(--peek-border)' }} />
         <SessionPicker />
-        <RecordButtonPlaceholder />
+        <RecordButton />
         <div style={{ width: 1, height: 18, background: 'var(--peek-border)' }} />
         <FilterChips />
         <div style={{ marginLeft: 'auto' }}>
@@ -166,6 +189,8 @@ export function AppShell(): ReactElement {
         </button>
       </header>
 
+      <FocusBar />
+
       <main
         style={{
           flex: 1,
@@ -179,27 +204,5 @@ export function AppShell(): ReactElement {
 
       <KbHelp />
     </div>
-  );
-}
-
-function RecordButtonPlaceholder(): ReactElement {
-  return (
-    <button
-      type="button"
-      data-testid="record-button-placeholder"
-      disabled
-      className="peek-mono"
-      style={{
-        fontSize: 'var(--peek-fs-xs)',
-        padding: '4px 8px',
-        border: '1px solid var(--peek-border)',
-        color: 'var(--peek-fg-faint)',
-        textTransform: 'uppercase',
-        letterSpacing: '0.08em',
-        cursor: 'not-allowed',
-      }}
-    >
-      ● rec
-    </button>
   );
 }

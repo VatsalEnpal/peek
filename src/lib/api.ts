@@ -53,3 +53,51 @@ export async function apiPost<T>(
   });
   return parse<T>(res);
 }
+
+export async function apiPatch<T>(
+  path: string,
+  body: unknown,
+  extraHeaders: Record<string, string> = {}
+): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
+    body: JSON.stringify(body ?? {}),
+  });
+  return parse<T>(res);
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: 'DELETE' });
+  return parse<T>(res);
+}
+
+// --- Bookmark helpers (thin wrappers kept here to centralise path strings) ---
+
+export type BookmarkDto = {
+  id: string;
+  sessionId: string;
+  label?: string;
+  source?: 'record' | 'focus' | 'marker' | string;
+  startTs?: string;
+  endTs?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export async function listBookmarks(sessionId?: string): Promise<BookmarkDto[]> {
+  const qs = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+  return apiGet<BookmarkDto[]>(`/api/bookmarks${qs}`);
+}
+
+export async function createBookmark(
+  body: Omit<BookmarkDto, 'id'> & { id?: string }
+): Promise<BookmarkDto> {
+  return apiPost<BookmarkDto>('/api/bookmarks', body);
+}
+
+export async function updateBookmark(
+  id: string,
+  patch: Partial<Pick<BookmarkDto, 'label' | 'endTs' | 'startTs' | 'metadata'>>
+): Promise<BookmarkDto> {
+  return apiPatch<BookmarkDto>(`/api/bookmarks/${encodeURIComponent(id)}`, patch);
+}

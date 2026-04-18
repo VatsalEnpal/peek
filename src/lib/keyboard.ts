@@ -9,6 +9,7 @@
  *   Enter          → open inspector for current row
  *   Esc            → close inspector
  *   ?              → toggle help overlay
+ *   Cmd/Ctrl+Shift+R → toggle recording
  *
  * Ignores keydowns while an input/textarea/contenteditable has focus so the
  * user can type in filters without hijacking j/k.
@@ -21,7 +22,8 @@ export type KbAction =
   | { kind: 'expand' }
   | { kind: 'open' }
   | { kind: 'close' }
-  | { kind: 'toggle-help' };
+  | { kind: 'toggle-help' }
+  | { kind: 'toggle-record' };
 
 export function parseKeyEvent(e: KeyboardEvent): KbAction | null {
   const target = e.target as HTMLElement | null;
@@ -30,6 +32,17 @@ export function parseKeyEvent(e: KeyboardEvent): KbAction | null {
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return null;
     if (target.isContentEditable) return null;
   }
+
+  // Record hotkey: Cmd/Ctrl + Shift + R. Check *before* the "no modifiers"
+  // gate so it doesn't get filtered out.
+  if (
+    (e.metaKey || e.ctrlKey) &&
+    e.shiftKey &&
+    (e.code === 'KeyR' || e.key.toLowerCase() === 'r')
+  ) {
+    return { kind: 'toggle-record' };
+  }
+
   if (e.metaKey || e.ctrlKey || e.altKey) return null;
 
   switch (e.key) {
@@ -60,7 +73,6 @@ export function bindKeyboard(handler: (a: KbAction) => void): () => void {
   const listener = (e: KeyboardEvent): void => {
     const a = parseKeyEvent(e);
     if (!a) return;
-    // `?` is shift+/ on US layouts — make sure we don't block text input.
     e.preventDefault();
     handler(a);
   };

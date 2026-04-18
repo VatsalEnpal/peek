@@ -24,6 +24,7 @@ import { countTokensOffline, countTokensViaAPI } from './tokenizer';
 import { redactBlock, createSessionSalt, sourceLineHash } from './redactor';
 import { reconcileSubagentTokens } from './self-check';
 import { Store, type SessionRow, type TurnRow, type SpanRow, type LedgerEntryRow } from './store';
+import { detectMarkers } from '../bookmarks/marker-detector';
 
 export type ImportOpts = {
   /** If true, scan + count but don't write to store. */
@@ -346,6 +347,7 @@ type PerFileResult = {
   summary: ImportSessionSummary;
   drifts: DriftWarning[];
   salt: string;
+  rawEvents: unknown[];
 };
 
 async function importSingleFile(
@@ -433,7 +435,7 @@ async function importSingleFile(
     totalTokens,
   };
 
-  return { session, summary, drifts, salt };
+  return { session, summary, drifts, salt, rawEvents: events };
 }
 
 // ---------------------------------------------------------------------------
@@ -460,8 +462,23 @@ export async function importPath(
     const dataDir = opts.dataDir ?? join(process.env.HOME ?? '/tmp', '.peek');
     const store = new Store(dataDir);
     try {
-      for (const { session, salt } of perFile) {
+      for (const { session, salt, rawEvents } of perFile) {
         persistSession(store, session, salt);
+        // Detect @peek-start/@peek-end marker bookmarks from the user-text
+        // stream and persist each as a marker-sourced bookmark.
+        const markers = detectMarkers(session, rawEvents as unknown[]);
+        for (const bm of markers) {
+          const row: Parameters<Store['putBookmark']>[0] = {
+            id: bm.id,
+            sessionId: bm.sessionId,
+            label: bm.label,
+            source: bm.source,
+            startTs: bm.startTs,
+          };
+          if (bm.endTs !== undefined) row.endTs = bm.endTs;
+          if (bm.metadata !== undefined) row.metadata = bm.metadata;
+          store.putBookmark(row);
+        }
       }
     } finally {
       store.close();
