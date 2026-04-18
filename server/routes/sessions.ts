@@ -1,0 +1,126 @@
+/**
+ * Sessions + events routes.
+ *
+ *   GET /api/sessions
+ *     → [{ id, label, firstPrompt, turnCount, totalTokens, timeAgo }], most
+ *       recent first. Label falls back to firstPrompt[:80] then to id.
+ *
+ *   GET /api/sessions/:id/events?start=&end=&types=
+ *     → interleaved span + ledger events in source order, filtered and paginated.
+ *
+ *   GET /api/sessions/:id/spans/:spanId
+ *     → { span, inputs, outputs, ledgerSnapshot } for a single span.
+ *
+ * Thin route layer: all querying delegates to the Store's typed methods.
+ */
+
+import { Router, type Request, type Response } from 'express';
+
+import type { Store, SpanRow, LedgerEntryRow } from '../pipeline/store';
+
+const router = Router();
+
+function timeAgo(iso: string | undefined, now = Date.now()): string {
+  if (!iso) return 'unknown';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return 'unknown';
+  const diff = Math.max(0, Math.floor((now - t) / 1000));
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+router.get('/', (req: Request, res: Response) => {
+  const store = req.app.locals.store as Store;
+  const rows = store.listSessions();
+
+  const summaries = rows.map((s) => {
+    const events = store.listEvents(s.id);
+    const ledgerEntries = events.filter((e) => e.kind === 'ledger') as Array<
+      LedgerEntryRow & { kind: 'ledger' }
+    >;
+    const turnIds = new Set<string>();
+    for (const e of events) {
+      if (e.kind === 'span' && (e as SpanRow & { kind: 'span' }).turnId) {
+        turnIds.add((e as SpanRow & { kind: 'span' }).turnId as string);
+      }
+      if (e.kind === 'ledger' && (e as LedgerEntryRow & { kind: 'ledger' }).turnId) {
+        turnIds.add((e as LedgerEntryRow & { kind: 'ledger' }).turnId as string);
+      }
+    }
+    const totalTokens = ledgerEntries.reduce((n, l) => n + (l.tokens ?? 0), 0);
+    const label = s.firstPrompt ? s.firstPrompt.slice(0, 80) : s.id;
+    return {
+      id: s.id,
+      label,
+      firstPrompt: s.firstPrompt ?? null,
+      turnCount: turnIds.size,
+      totalTokens,
+      timeAgo: timeAgo(s.startTs ?? s.endTs),
+      startTs: s.startTs ?? null,
+      endTs: s.endTs ?? null,
+    };
+  });
+
+  summaries.sort((a, b) => {
+    const aTs = a.startTs ?? '';
+    const bTs = b.startTs ?? '';
+    if (aTs === bTs) return a.id < b.id ? -1 : 1;
+    return aTs < bTs ? 1 : -1;
+  });
+
+  res.json(summaries);
+});
+
+router.get('/:id/events', (req: Request, res: Response) => {
+  const store = req.app.locals.store as Store;
+  const id = String(req.params.id);
+  const session = store.getSession(id);
+  if (!session) {
+    res.status(404).json({ error: 'session not found', id });
+    return;
+  }
+
+  const { start, end, types } = req.query;
+  const opts: { start?: string; end?: string; types?: string[]; limit?: number } = {};
+  if (typeof start === 'string') opts.start = start;
+  if (typeof end === 'string') opts.end = end;
+  if (typeof types === 'string' && types.length > 0) {
+    opts.types = types.split(',').filter(Boolean);
+  }
+
+  const events = store.listEvents(id, opts);
+  res.json(events);
+});
+
+router.get('/:id/spans/:spanId', (req: Request, res: Response) => {
+  const store = req.app.locals.store as Store;
+  const id = String(req.params.id);
+  const spanId = String(req.params.spanId);
+  const session = store.getSession(id);
+  if (!session) {
+    res.status(404).json({ error: 'session not found', id });
+    return;
+  }
+  const events = store.listEvents(id);
+  const span = events.find(
+    (e): e is SpanRow & { kind: 'span' } => e.kind === 'span' && e.id === spanId
+  );
+  if (!span) {
+    res.status(404).json({ error: 'span not found', id: spanId });
+    return;
+  }
+  const ledgerSnapshot = events.filter(
+    (e): e is LedgerEntryRow & { kind: 'ledger' } =>
+      e.kind === 'ledger' && e.introducedBySpanId === spanId
+  );
+  res.json({
+    span,
+    inputs: span.inputs ?? null,
+    outputs: span.outputs ?? null,
+    ledgerSnapshot,
+  });
+});
+
+export default router;

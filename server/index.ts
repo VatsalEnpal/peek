@@ -1,20 +1,138 @@
-// Stub — implemented in Group 6. Exports startServer for bin/peek.ts.
-import express from 'express';
+/**
+ * Express server shell for peek-trace.
+ *
+ * Exports:
+ *   - `createServer({ dataDir, port? })` — wiring factory used by both the CLI
+ *     (`bin/peek.ts serve`) and integration tests. Returns `{ app, listen,
+ *     close }`. Listening on port 0 yields an ephemeral port so tests can
+ *     run in parallel.
+ *   - `startServer({ port? })` — kept for backwards compatibility with the
+ *     scaffold's CLI wiring. Resolves the default dataDir from
+ *     `PEEK_DATA_DIR` or `$HOME/.peek`.
+ *
+ * The factory mounts a single `Store` instance on `app.locals.store` so
+ * route modules can access the DB without re-opening connections. CORS is
+ * restricted to `http://localhost:*` (any port) with a tiny hand-rolled
+ * middleware — avoids pulling in the `cors` dependency for five lines of
+ * regex. Graceful shutdown closes both the HTTP listener and the Store.
+ */
 
-export async function startServer(opts: { port?: number } = {}): Promise<void> {
-  const port = opts.port ?? 7334;
+import http from 'node:http';
+import { join } from 'node:path';
+
+import express, { type Express, type Request, type Response, type NextFunction } from 'express';
+
+import { Store } from './pipeline/store';
+import healthRouter from './routes/health';
+import sessionsRouter from './routes/sessions';
+import importRouter from './routes/import';
+import bookmarksRouter from './routes/bookmarks';
+import unmaskRouter from './routes/unmask';
+
+const LOCALHOST_ORIGIN = /^http:\/\/localhost(:\d+)?$/;
+
+export type CreateServerOpts = {
+  dataDir: string;
+  port?: number;
+};
+
+export type ServerHandle = {
+  app: Express;
+  listen: () => Promise<http.Server>;
+  close: () => Promise<void>;
+};
+
+export function createServer(opts: CreateServerOpts): ServerHandle {
   const app = express();
+  app.use(express.json({ limit: '50mb' }));
 
-  app.get('/api/healthz', (_req, res) => {
-    res.json({
-      status: 'ok',
-      version: '0.0.1',
-      scaffold: true,
-      note: 'Full server not implemented — Groups 6-14 build this.',
-    });
+  // CORS — localhost only, any port. Hand-rolled to keep deps minimal.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const origin = req.headers.origin;
+    if (typeof origin === 'string' && LOCALHOST_ORIGIN.test(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Unmask-Confirm,Accept,Origin');
+      res.setHeader('Vary', 'Origin');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
   });
 
-  app.listen(port, () => {
-    console.log(`peek (scaffold) listening on http://localhost:${port}`);
-  });
+  const store = new Store(opts.dataDir);
+  app.locals.store = store;
+  app.locals.dataDir = opts.dataDir;
+
+  app.use('/api', healthRouter);
+  app.use('/api/sessions', sessionsRouter);
+  app.use('/api/import', importRouter);
+  app.use('/api/bookmarks', bookmarksRouter);
+  app.use('/api/unmask', unmaskRouter);
+
+  // Production static serving for the Vite bundle.
+  if (process.env.NODE_ENV === 'production') {
+    const distDir = join(__dirname, '..', 'dist');
+    app.use(express.static(distDir));
+  }
+
+  let server: http.Server | null = null;
+
+  return {
+    app,
+    async listen() {
+      const port = opts.port ?? 7334;
+      server = await new Promise<http.Server>((resolve) => {
+        const s = app.listen(port, () => resolve(s));
+      });
+      return server;
+    },
+    async close() {
+      if (server) {
+        await new Promise<void>((resolve, reject) => {
+          server!.close((err) => (err ? reject(err) : resolve()));
+        });
+        server = null;
+      }
+      try {
+        store.close();
+      } catch {
+        /* store may already be closed */
+      }
+    },
+  };
+}
+
+/**
+ * Legacy scaffold entry point — kept so `bin/peek.ts` continues to import
+ * `startServer` without change. Resolves dataDir from `PEEK_DATA_DIR` or
+ * `$HOME/.peek`, binds SIGTERM/SIGINT for graceful shutdown, and logs the
+ * listener URL to stdout.
+ */
+export async function startServer(opts: { port?: number; dataDir?: string } = {}): Promise<void> {
+  const dataDir =
+    opts.dataDir ?? process.env.PEEK_DATA_DIR ?? join(process.env.HOME ?? '/tmp', '.peek');
+  const port = opts.port ?? Number(process.env.PEEK_PORT ?? 7334);
+
+  const handle = createServer({ dataDir, port });
+  const server = await handle.listen();
+  const addr = server.address();
+  const boundPort = typeof addr === 'object' && addr !== null ? addr.port : port;
+
+  // eslint-disable-next-line no-console
+  console.log(`peek listening on http://localhost:${boundPort} (dataDir=${dataDir})`);
+
+  const shutdown = async (): Promise<void> => {
+    // eslint-disable-next-line no-console
+    console.log('peek: shutting down...');
+    try {
+      await handle.close();
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
