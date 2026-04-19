@@ -276,7 +276,7 @@ bookmarks
 
 program
   .command('install')
-  .description('Install /peek_start and /peek_end slash commands into ~/.claude/')
+  .description('Install /peek_start and /peek_end slash commands into ~/.claude/commands/')
   .option('--force', 'overwrite existing files', false)
   .option(
     '--target <dir>',

@@ -2,13 +2,11 @@
 
 **A local recorder for Claude Code sessions.** Mark an interval with `/peek_start NAME`, work normally, close it with `/peek_end` — and get back a complete, navigable log of every tool call, file read, subagent, and API request that happened inside the window. All local. Nothing leaves your laptop.
 
-![demo](docs/demo.gif)
-
-<!-- placeholder — demo GIF recorded against the live v0.3 flow -->
-
 ---
 
 ## Install (30 seconds)
+
+**Prerequisites:** Node.js 22 or newer (`node --version`). Claude Code installed and run at least once so `~/.claude/` exists.
 
 ```bash
 npx peek install     # installs /peek_start + /peek_end into ~/.claude/commands/
@@ -76,18 +74,18 @@ The daemon stores recordings and events under `~/.peek/` on your machine. Captur
 
 ## Commands
 
-| Command              | Purpose                                                                                                                                 |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `peek`               | Start the recorder on `http://127.0.0.1:7335`.                                                                                          |
-| `peek install`       | Copy `/peek_start` and `/peek_end` into `~/.claude/commands/`. `--force` overwrites. `--target <dir>` installs elsewhere (for testing). |
-| `peek serve`         | HTTP server only (no watcher). `--port` overrides 7335.                                                                                 |
-| `peek watch`         | JSONL watcher only (no UI). For headless setups.                                                                                        |
-| `peek import <path>` | One-shot import of a JSONL file or directory. Only populates the legacy `/sessions` view — recordings still require `/peek_start`.      |
+| Command              | Purpose                                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `peek`               | Start the recorder (HTTP + JSONL watcher) on `http://127.0.0.1:7335`. Equivalent to `peek serve`.                                                                         |
+| `peek serve`         | Same as `peek` with explicit flags. Watcher runs by default; pass `--no-watch` to disable. `--port`, `--data-dir`, `--claude-dir` override the defaults.                  |
+| `peek install`       | Copy `/peek_start` and `/peek_end` into `~/.claude/commands/`. `--force` overwrites. `--target <dir>` installs elsewhere (for testing).                                   |
+| `peek import <path>` | One-shot import of a JSONL file or directory. Only populates the legacy `/sessions` view — recordings still require `/peek_start`.                                        |
 
 Environment variables:
 
-- `PEEK_PORT` — override the default live-mode port (`7335`).
-- `PEEK_HOST` — override `127.0.0.1`. Use `0.0.0.0` inside a container if you need LAN access (not recommended on trusted networks only).
+- `PEEK_PORT` — override the default port (`7335`). Honored by both `peek` and `peek serve`; the `/peek_start` / `/peek_end` slash commands also honor it so they always hit the right daemon.
+- `PEEK_DATA_DIR` — override the data directory (default `~/.peek/`). Useful for hermetic test runs or keeping recordings under a project tree.
+- `PEEK_HOST` — override `127.0.0.1`. Use `0.0.0.0` inside a container if you need LAN access (only on trusted networks).
 
 ## Routes
 
@@ -97,12 +95,14 @@ Environment variables:
 
 ## Keyboard shortcuts
 
-| Key       | Action                              |
-| --------- | ----------------------------------- |
-| `?`       | Open the help drawer                |
-| `Esc`     | Close any open drawer or modal      |
-| `/`       | Focus the search input              |
-| `j` / `k` | Next / previous row in the timeline |
+| Key                                   | Action                                     |
+| ------------------------------------- | ------------------------------------------ |
+| `?`                                   | Open the help drawer                       |
+| `Esc`                                 | Close any open drawer or modal             |
+| `j` / `k` (or `↓` / `↑`)              | Next / previous row in the timeline        |
+| `h` / `l` (or `←` / `→`)              | Collapse / expand the focused row          |
+| `Enter`                               | Open / drill into the focused row          |
+| `Cmd+Shift+R` / `Ctrl+Shift+R`        | Toggle recording (when no slash commands)  |
 
 ## Troubleshooting
 
