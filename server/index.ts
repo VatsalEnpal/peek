@@ -32,6 +32,7 @@ import unmaskRouter from './routes/unmask';
 import openRouter from './routes/open';
 import sseRouter from './api/sse';
 import markersRouter from './api/markers';
+import recordingsRouter from './routes/recordings';
 
 const LOCALHOST_ORIGIN = /^http:\/\/localhost(:\d+)?$/;
 
@@ -88,6 +89,7 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
   app.use('/api/open', openRouter);
   app.use('/api/events', sseRouter);
   app.use('/api/markers', markersRouter);
+  app.use('/api/recordings', recordingsRouter);
 
   // Static serving for the Vite bundle. Always mount if a build exists on
   // disk — the CLI never sets NODE_ENV=production, and the old gate meant
@@ -121,8 +123,8 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
           if (err.code === 'EADDRINUSE') {
             reject(
               new Error(
-                `peek: port ${port} is already in use. Another peek (or different app) is running on that port. Stop it with \`lsof -ti :${port} | xargs kill\`, or run with a different port: PEEK_PORT=7336 peek`,
-              ),
+                `peek: port ${port} is already in use. Another peek (or different app) is running on that port. Stop it with \`lsof -ti :${port} | xargs kill\`, or run with a different port: PEEK_PORT=7336 peek`
+              )
             );
           } else {
             reject(err);
@@ -154,7 +156,7 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
  * listener URL to stdout.
  */
 export async function startServer(
-  opts: { port?: number; dataDir?: string; host?: string } = {},
+  opts: { port?: number; dataDir?: string; host?: string } = {}
 ): Promise<void> {
   const dataDir =
     opts.dataDir ?? process.env.PEEK_DATA_DIR ?? join(process.env.HOME ?? '/tmp', '.peek');
@@ -176,7 +178,7 @@ export async function startServer(
       boundHost === DEFAULT_BIND_HOST
         ? ''
         : ' — NOTE: binding non-loopback host, API is reachable from the network'
-    }`,
+    }`
   );
 
   const shutdown = async (): Promise<void> => {

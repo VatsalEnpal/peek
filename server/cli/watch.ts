@@ -212,7 +212,26 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
           const before = state.lastSpanCounts.get(s.id) ?? initial.spanCounts.get(s.id) ?? 0;
           const after = currentCounts.get(s.id) ?? 0;
           if (after > before) {
-            broadcast('span:new', { sessionId: s.id, spanDelta: after - before });
+            // v0.3 L2.4: surface recordingId on span:new when an open
+            // recording owns this session so the UI can increment counters
+            // on the right row without a refetch.
+            let recordingId: string | undefined;
+            try {
+              const rs = new Store(dataDir);
+              try {
+                const open = rs.listOpenRecordingsBySession(s.id);
+                if (open.length > 0) recordingId = open[open.length - 1].id;
+              } finally {
+                rs.close();
+              }
+            } catch {
+              /* best-effort — don't fail the watcher loop */
+            }
+            broadcast('span:new', {
+              sessionId: s.id,
+              spanDelta: after - before,
+              ...(recordingId ? { recordingId } : {}),
+            });
           }
         }
         state.lastSpanCounts.set(s.id, currentCounts.get(s.id) ?? 0);
