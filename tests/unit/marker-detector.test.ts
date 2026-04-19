@@ -27,17 +27,17 @@ describe('detectMarkers (Task 5.3)', () => {
     expect(bms[0].endTs).toBeUndefined();
   });
 
-  test('@peek-start + @peek-end creates a closed bookmark', () => {
+  test('@peek-start + @peek-end creates a closed bookmark (v0.3: whole-line only)', () => {
     const bms = detectMarkers(makeSession(), [
       {
         type: 'user',
         timestamp: '2026-04-19T00:00:00Z',
-        message: { content: 'hello @peek-start investigate leak world' },
+        message: { content: '@peek-start investigate leak world' },
       },
       {
         type: 'user',
         timestamp: '2026-04-19T00:05:00Z',
-        message: { content: 'done @peek-end' },
+        message: { content: '@peek-end' },
       },
     ]);
     expect(bms).toHaveLength(1);
@@ -80,13 +80,13 @@ describe('detectMarkers (Task 5.3)', () => {
     expect(bms[0].metadata?.warnings?.some((w) => w.includes('nested'))).toBe(true);
   });
 
-  test('handles array-shaped content with text blocks', () => {
+  test('handles array-shaped content with text blocks (v0.3: whole-line only)', () => {
     const bms = detectMarkers(makeSession(), [
       {
         type: 'user',
         timestamp: '2026-04-19T00:00:00Z',
         message: {
-          content: [{ type: 'text', text: 'please @peek-start debugging' }],
+          content: [{ type: 'text', text: '@peek-start debugging' }],
         },
       },
     ]);

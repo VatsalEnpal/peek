@@ -11,13 +11,10 @@ export type MarkerBookmark = {
   metadata?: { warnings?: string[] };
 };
 
-const START_REGEX = /@peek-start(?:[ \t]+([^\n]*))?/;
-const END_REGEX = /@peek-end\b/;
-
 /**
- * Strict, anchored marker recogniser introduced in v0.2.1 (L1.3).
+ * Strict, anchored marker recogniser.
  *
- * Matches a single line whose sole payload is a marker directive, e.g.:
+ * Matches a user_prompt whose entire payload IS a marker directive, e.g.:
  *
  *   /peek_start NAME
  *   @peek-start NAME
@@ -30,8 +27,8 @@ const END_REGEX = /@peek-end\b/;
  *
  * Plain-prose mentions like "I will @peek-start later" do NOT match — the
  * regex is anchored and rejects anything after the name that isn't
- * whitespace. Unanchored detection (legacy `detectMarkers`) remains for the
- * v0.2.0 importer path so we don't regress the existing acceptance tests.
+ * whitespace. The v0.2.0 loose inline fallback was removed in v0.3 (L1.2)
+ * per the spec — "only match as the WHOLE user_prompt text, not prose".
  */
 const MARKER_REGEX = /^\s*(?:@|\/)peek[-_](start|end)(?:\s+(.+?))?\s*$/i;
 
@@ -49,7 +46,7 @@ export function matchMarker(text: string): MarkerMatch | null {
   return { type, name };
 }
 
-type TextEvent = { text: string; ts?: string; turnId?: string };
+type TextEvent = { text: string; ts?: string; turnId?: string; uuid?: string };
 
 function extractUserTexts(session: Session, rawEvents?: any[]): TextEvent[] {
   if (rawEvents) {
@@ -66,7 +63,7 @@ function extractUserTexts(session: Session, rawEvents?: any[]): TextEvent[] {
                   .map((b: any) => b.text ?? '')
                   .join('\n')
               : '';
-        return { text, ts: e.timestamp };
+        return { text, ts: e.timestamp, uuid: e.uuid };
       });
   }
   return session.turns.map((t) => ({ text: '', ts: t.startTs }));
@@ -77,66 +74,43 @@ export function detectMarkers(session: Session, rawEvents?: any[]): MarkerBookma
   const bookmarks: MarkerBookmark[] = [];
   const warnings: string[] = [];
 
-  let open: { label: string; startTs: string } | null = null;
+  // Deterministic bookmark id — derived from the *starting* event's uuid so
+  // re-importing the same JSONL produces identical ids and `INSERT OR REPLACE`
+  // becomes a no-op instead of a duplicate. Falls back to randomUUID when the
+  // source event lacks a uuid (hand-built test fixtures).
+  let open: { label: string; startTs: string; startUuid?: string } | null = null;
 
   for (const ev of texts) {
     if (!ev.text) continue;
 
-    // First, try the strict anchored slash-command matcher (v0.2.1 L1.3).
-    // It fires for lines whose entire payload IS the marker directive, e.g.
-    // `/peek_start foo` or `@peek-end`. If it matches we short-circuit so
-    // the legacy inline regex doesn't also fire on the same line.
+    // Strict anchored matcher only — the v0.2.0 loose inline fallback was
+    // removed in v0.3 (L1.2) so prose mentioning "@peek-end" in docs can no
+    // longer mint stray bookmarks.
     const strict = matchMarker(ev.text);
-    if (strict) {
-      if (strict.type === 'start') {
-        if (open) {
-          warnings.push(
-            `nested /peek_start or @peek-start while "${open.label}" was open; keeping original`
-          );
-        } else {
-          const label = strict.name ?? 'unlabeled';
-          open = { label, startTs: ev.ts ?? new Date().toISOString() };
-        }
-      } else {
-        // type === 'end'
-        if (!open) {
-          warnings.push('orphan /peek_end or @peek-end with no start; ignored');
-          continue;
-        }
-        bookmarks.push({
-          id: `bm-${randomUUID()}`,
-          sessionId: session.id,
-          label: open.label,
-          source: 'marker',
-          startTs: open.startTs,
-          endTs: ev.ts,
-          metadata: warnings.length ? { warnings: [...warnings] } : undefined,
-        });
-        open = null;
-      }
-      continue;
-    }
+    if (!strict) continue;
 
-    // Legacy loose inline detection (v0.2.0 `@peek-start X ... @peek-end`).
-    const startMatch = ev.text.match(START_REGEX);
-    const endMatch = ev.text.match(END_REGEX);
-
-    if (startMatch) {
+    if (strict.type === 'start') {
       if (open) {
-        warnings.push(`nested @peek-start while "${open.label}" was open; keeping original`);
-      } else {
-        const label = (startMatch[1] ?? '').trim() || 'unlabeled';
-        open = { label, startTs: ev.ts ?? new Date().toISOString() };
-      }
-    }
-
-    if (endMatch) {
-      if (!open) {
-        warnings.push('orphan @peek-end with no @peek-start; ignored');
+        warnings.push(
+          `nested /peek_start or @peek-start while "${open.label}" was open; keeping original`
+        );
         continue;
       }
+      const label = strict.name ?? 'unlabeled';
+      open = {
+        label,
+        startTs: ev.ts ?? new Date().toISOString(),
+      };
+      if (ev.uuid !== undefined) open.startUuid = ev.uuid;
+    } else {
+      // type === 'end'
+      if (!open) {
+        warnings.push('orphan /peek_end or @peek-end with no start; ignored');
+        continue;
+      }
+      const id = open.startUuid ? `bm-${open.startUuid}` : `bm-${randomUUID()}`;
       bookmarks.push({
-        id: `bm-${randomUUID()}`,
+        id,
         sessionId: session.id,
         label: open.label,
         source: 'marker',
@@ -149,8 +123,9 @@ export function detectMarkers(session: Session, rawEvents?: any[]): MarkerBookma
   }
 
   if (open) {
+    const id = open.startUuid ? `bm-${open.startUuid}` : `bm-${randomUUID()}`;
     bookmarks.push({
-      id: `bm-${randomUUID()}`,
+      id,
       sessionId: session.id,
       label: open.label,
       source: 'marker',
