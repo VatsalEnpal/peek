@@ -152,4 +152,42 @@ describe('startServe({ watch: true }) — non-blocking initial import', () => {
     expect(parsed.status).toBe('ok');
     }
   );
+
+  test(
+    'GET /api/import-status exposes watcher queue progress',
+    { timeout: 60_000 },
+    async () => {
+      handle = await startServe({ dataDir, claudeDir, port: 0, watch: true });
+
+      // Poll import-status until the queue fully drains so we can assert
+      // both the in-progress shape AND the terminal empty-queue shape.
+      const start = Date.now();
+      let lastStatus: {
+        watching: boolean;
+        importedCount?: number;
+        queueLength?: number;
+        inProgress?: boolean;
+      } = { watching: false };
+      while (Date.now() - start < 55_000) {
+        const r = await httpGet(`http://127.0.0.1:${handle.port}/api/import-status`, 2000);
+        expect(r.status).toBe(200);
+        lastStatus = JSON.parse(r.body);
+        expect(lastStatus.watching).toBe(true);
+        if ((lastStatus.importedCount ?? 0) >= 80 && (lastStatus.queueLength ?? 1) === 0) {
+          break;
+        }
+        await new Promise((rs) => setTimeout(rs, 100));
+      }
+      expect(lastStatus.importedCount).toBe(80);
+      expect(lastStatus.queueLength).toBe(0);
+      expect(lastStatus.inProgress).toBe(false);
+    }
+  );
+
+  test('GET /api/import-status without --watch returns { watching: false }', async () => {
+    handle = await startServe({ dataDir, claudeDir, port: 0, watch: false });
+    const r = await httpGet(`http://127.0.0.1:${handle.port}/api/import-status`, 2000);
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ watching: false });
+  });
 });

@@ -52,4 +52,40 @@ router.get('/healthz', (req: Request, res: Response) => {
   });
 });
 
+/**
+ * GET /api/import-status — live view of the watcher's import queue.
+ *
+ * Present only when `peek serve --watch` is running (i.e. the watcher wired
+ * itself onto `app.locals.importStatus`). Returns:
+ *   {
+ *     watching: true,
+ *     importedCount: number,     // files finished since startup
+ *     queueLength: number,       // files waiting
+ *     inProgress: boolean,       // worker currently busy
+ *     currentFile: string | null // path of the file being imported
+ *   }
+ *
+ * When the watcher is NOT running (e.g. plain `peek serve`) the route
+ * returns `{ watching: false }` with a 200, so the UI can safely poll.
+ *
+ * Motivation: on first launch against a long-lived `~/.claude/projects`
+ * (hundreds of existing sessions), the import queue can take several
+ * minutes to drain. The UI polls this endpoint to render a
+ * "Importing N of M sessions…" indicator instead of an empty page.
+ */
+router.get('/import-status', (req: Request, res: Response) => {
+  const fn = req.app.locals.importStatus as (() => unknown) | undefined;
+  if (typeof fn !== 'function') {
+    res.json({ watching: false });
+    return;
+  }
+  const snap = fn() as {
+    importedCount: number;
+    queueLength: number;
+    inProgress: boolean;
+    currentFile: string | null;
+  };
+  res.json({ watching: true, ...snap });
+});
+
 export default router;

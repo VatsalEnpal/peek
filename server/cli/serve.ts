@@ -54,6 +54,9 @@ export async function startServe(opts: StartServeOpts): Promise<ServeHandle> {
   if (opts.watch) {
     const claudeDir = opts.claudeDir ?? defaultClaudeDir();
     watcher = await startWatch({ dataDir: opts.dataDir, claudeDir });
+    // Expose the watcher's live import-queue status to HTTP routes
+    // (served by `/api/import-status` — see server/routes/health.ts).
+    handle.app.locals.importStatus = () => watcher!.status();
   }
 
   return {
