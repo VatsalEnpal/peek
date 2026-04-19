@@ -203,6 +203,54 @@ describe('startWatch (L1.1)', () => {
     expect(buf).toMatch(/"sessionId":"watch-session-1"/);
   });
 
+  test('L5-followup: claudeDir whose ancestor path contains a dot-segment (e.g. ~/.claude) is NOT ignored', async () => {
+    // Repro of the silent no-op daemon bug: when the user runs plain `peek`,
+    // the default watched directory is `~/.claude/projects`. If the ignored
+    // predicate matches ANY dot-segment in the absolute path (including
+    // ancestors), every descendant under `~/.claude/*` is rejected and the
+    // daemon silently imports nothing. This test creates a fake ".claude"
+    // ancestor then verifies imports still happen under it.
+    const hiddenRoot = join(ctx.claudeDir, '.claude');
+    const projectDir = join(hiddenRoot, 'projects', 'my-project');
+    mkdirSync(projectDir, { recursive: true });
+    const jsonl = join(projectDir, 'uat.jsonl');
+
+    const watcher = await startWatch({
+      dataDir: ctx.dataDir,
+      claudeDir: join(hiddenRoot, 'projects'),
+    });
+    stopWatch = async () => watcher.stop();
+
+    // Wait a tick so the watcher registers.
+    await new Promise((r) => setTimeout(r, 150));
+
+    writeFileSync(
+      jsonl,
+      userEvent({
+        uuid: 'u-dot',
+        sessionId: 'watch-session-dot',
+        ts: '2026-04-19T18:00:00Z',
+        text: 'hi from under .claude',
+      })
+    );
+
+    await waitFor(
+      () => {
+        const s = new Store(ctx.dataDir);
+        try {
+          const sessions = (s as any).db
+            .prepare('SELECT id FROM sessions WHERE id = ?')
+            .all('watch-session-dot') as { id: string }[];
+          return sessions.length > 0 ? true : undefined;
+        } finally {
+          s.close();
+        }
+      },
+      3000,
+      50
+    );
+  });
+
   test('appending to existing .jsonl → incremental import adds span + SSE span:new', async () => {
     const projectDir = join(ctx.claudeDir, 'project-y');
     mkdirSync(projectDir, { recursive: true });

@@ -104,11 +104,32 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
   // ready. Watching the directory root (absolute path) + filtering on
   // `.jsonl` in the event handler is the documented work-around and matches
   // the behaviour we verified empirically against chokidar 5.0.0 on macOS.
+  //
+  // `ignored`: skip dot-prefixed path segments relative to the watched root
+  // only. Matching the root itself (e.g. `~/.claude/projects`) against a
+  // naïve `/(^|\/)\.[^/]/` regex would reject everything — the leading
+  // `.claude` component in the ancestor path would trip the pattern for
+  // every descendant path. We strip the `claudeDir` prefix first, then
+  // check whether any SEGMENT of the relative remainder starts with `.`.
+  // Fixes a silent no-op daemon on default `~/.claude/projects` setups.
+  // `ignored`: skip dot-prefixed path segments relative to the watched root
+  // only. Matching the root itself (e.g. `~/.claude/projects`) against a
+  // naïve `/(^|\/)\.[^/]/` regex would reject everything — the leading
+  // `.claude` component in the ancestor path would trip the pattern for
+  // every descendant path. We strip the `claudeDir` prefix first, then
+  // check whether any SEGMENT of the relative remainder starts with `.`.
+  // Fixes a silent no-op daemon on default `~/.claude/projects` setups
+  // (v0.2.1 L5-followup).
+  const rootPrefix = claudeDir.endsWith('/') ? claudeDir : claudeDir + '/';
   const watcher: FSWatcher = watch(claudeDir, {
     ignoreInitial: false,
     persistent: true,
     awaitWriteFinish: false,
-    ignored: (p: string) => /(^|\/)\.[^/]/.test(p),
+    ignored: (p: string) => {
+      if (p === claudeDir) return false;
+      const rel = p.startsWith(rootPrefix) ? p.slice(rootPrefix.length) : p;
+      return rel.split('/').some((seg) => seg.startsWith('.'));
+    },
   });
 
   const isJsonl = (p: string): boolean => p.endsWith('.jsonl');
