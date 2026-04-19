@@ -1,0 +1,61 @@
+# v0.2.1 L5.5 — Live Docker acceptance.
+#
+# Purpose: exercise the FULL user-visible slash-command loop inside a fresh
+# container, using a real (headless) Claude Code CLI, so we prove the
+# shipped /peek_start + /peek_end slash commands hit the Peek daemon and
+# persist bookmarks end-to-end.
+#
+# Build context: the repo root. The tarball produced by `npm pack` is
+# expected to be named `peek-trace-*.tgz` and sit at the context root.
+# Tests call `scripts/build-docker-live.sh` (invoked from the acceptance
+# spec) which `npm pack`s first, then `docker build`s this file with the
+# tarball in context.
+#
+# Runtime contract (see tests/acceptance/a6-docker-live-verify.spec.ts):
+#   docker run --rm \
+#     -e ANTHROPIC_API_KEY=... \
+#     peek-live-verify
+#
+# Entrypoint script:
+#   1. Installs slash commands to $HOME/.claude via `peek install`.
+#   2. Starts `peek` bare in background on $PEEK_PORT (default 7335).
+#   3. Uses `claude -p "/peek_start docker-test"` + bash echo + /peek_end
+#      to drive the slash commands from a real Claude Code session.
+#   4. curls /api/bookmarks and asserts the 'docker-test' bookmark exists.
+#
+# Exits 0 on success. Any failure (non-200, missing bookmark, CLI error)
+# exits non-zero.
+
+FROM node:20-bullseye
+
+# --- System deps (jq + curl for the verify step) ----------------------------
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends jq curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Claude Code CLI --------------------------------------------------------
+# Pinned `@latest` here intentionally — we want the live CLI to match what a
+# first-time `npx peek install` user actually runs. If this container starts
+# failing on a future CC release, the fix is to debug the new CLI surface,
+# not to pin.
+RUN npm install -g --omit=dev @anthropic-ai/claude-code
+
+# --- Peek from the local tarball --------------------------------------------
+# The host must `npm pack` into the build context before `docker build`.
+# Build context expects `peek-trace-*.tgz` at the top level.
+WORKDIR /opt/peek
+COPY peek-trace-*.tgz /opt/peek/peek.tgz
+RUN npm install -g --omit=dev /opt/peek/peek.tgz
+
+# --- Entry script -----------------------------------------------------------
+COPY docker/live-verify-entry.sh /usr/local/bin/live-verify-entry
+RUN chmod +x /usr/local/bin/live-verify-entry
+
+# Skill commands need ~/.claude/ to exist.
+ENV HOME=/root
+RUN mkdir -p /root/.claude/projects /root/.claude/commands
+
+# Peek port. The entry script assumes 7335 but honors $PEEK_PORT.
+ENV PEEK_PORT=7335
+
+ENTRYPOINT ["/usr/local/bin/live-verify-entry"]
