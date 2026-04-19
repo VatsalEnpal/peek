@@ -51,10 +51,7 @@ async function startServer(): Promise<Ctx> {
   };
 }
 
-function postJson(
-  url: string,
-  body: unknown
-): Promise<{ status: number; body: any }> {
+function postJson(url: string, body: unknown): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const data = Buffer.from(JSON.stringify(body), 'utf8');
     const u = new URL(url);
@@ -89,11 +86,7 @@ function postJson(
   });
 }
 
-function openSseAndCollect(
-  url: string,
-  count: number,
-  timeoutMs = 3000
-): Promise<string> {
+function openSseAndCollect(url: string, count: number, timeoutMs = 3000): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = http.get(url, { headers: { Accept: 'text/event-stream' } }, (res) => {
       let buf = '';
@@ -186,7 +179,11 @@ describe('POST /api/markers (L1.3)', () => {
 
   test('POST broadcasts marker:opened over SSE', async () => {
     const sseUrl = `${ctx.baseUrl}/api/events/stream`;
-    const sseP = openSseAndCollect(sseUrl, 1);
+    // v0.3 L1.3: POST /api/markers now emits BOTH `recording:started` (from
+    // the new Recording lifecycle) and `marker:opened` (the legacy bookmark
+    // broadcast), in that order. Collect both frames so the marker:opened
+    // assertion isn't truncated by the earlier recording:started frame.
+    const sseP = openSseAndCollect(sseUrl, 2);
     // Tiny delay so the subscriber registers before we POST.
     await new Promise((r) => setTimeout(r, 50));
     const post = await postJson(`${ctx.baseUrl}/api/markers`, {
