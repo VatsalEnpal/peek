@@ -15,6 +15,7 @@
 
 import { createHash } from 'node:crypto';
 import { openSync, readSync, closeSync, statSync } from 'node:fs';
+import * as fs from 'node:fs';
 
 import { Router, type Request, type Response } from 'express';
 
@@ -86,18 +87,95 @@ router.post('/', (req: Request, res: Response) => {
     return;
   }
 
-  // Optional integrity check: hash the source line (not the slice — we don't
-  // know the line boundaries at this layer). Skip if the stored hash is empty.
+  // Integrity check (BUG-7 fix): re-hash the FULL JSONL line that contains
+  // `byteStart` and compare against the stored `sourceLineHash`. Any byte
+  // mutation (even length-preserving) between import and unmask MUST produce
+  // a 409 so a TOCTOU attacker cannot coax plaintext out of a rewritten file.
   if (sourceLineHash && sourceLineHash.length > 0) {
-    // The stored hash is of the full JSONL line; if the slice bytes are a
-    // subset, we can't directly verify. We instead hash what we read and
-    // only fail when the stored hash is present AND it equals neither the
-    // line nor the slice hash of something recognisable. A softer check is
-    // sufficient here: read fully inside try/catch above already caught FS
-    // mutation. Leave the hash comparison as a no-op for now; full
-    // integrity check lives in the verify command (Group 7).
-    const _check = createHash('sha256').update(plaintext, 'utf8').digest('hex');
-    void _check;
+    try {
+      const stat = fs.statSync(file);
+      const size = stat.size;
+      const MAX_LINE = 16 * 1024 * 1024;
+
+      // Scan backward for the start of the line that owns byteStart.
+      let lineStart = Math.max(0, byteStart);
+      {
+        const CHUNK = 65536;
+        const fd = fs.openSync(file, 'r');
+        try {
+          while (lineStart > 0) {
+            const readLen = Math.min(CHUNK, lineStart);
+            const buf = Buffer.alloc(readLen);
+            fs.readSync(fd, buf, 0, readLen, lineStart - readLen);
+            const nl = buf.lastIndexOf(0x0a);
+            if (nl >= 0) {
+              lineStart = lineStart - readLen + nl + 1;
+              break;
+            }
+            lineStart -= readLen;
+            if (byteStart - lineStart > MAX_LINE) {
+              fs.closeSync(fd);
+              res.status(409).json({ error: 'source changed' });
+              return;
+            }
+          }
+        } finally {
+          try {
+            fs.closeSync(fd);
+          } catch {
+            /* already closed */
+          }
+        }
+      }
+
+      // Scan forward for the end of the line (exclusive of the trailing \n).
+      let lineEnd = Math.max(byteStart, lineStart);
+      {
+        const CHUNK = 65536;
+        const fd = fs.openSync(file, 'r');
+        try {
+          while (lineEnd < size) {
+            const readLen = Math.min(CHUNK, size - lineEnd);
+            const buf = Buffer.alloc(readLen);
+            fs.readSync(fd, buf, 0, readLen, lineEnd);
+            const nl = buf.indexOf(0x0a);
+            if (nl >= 0) {
+              lineEnd += nl;
+              break;
+            }
+            lineEnd += readLen;
+            if (lineEnd - lineStart > MAX_LINE) {
+              fs.closeSync(fd);
+              res.status(409).json({ error: 'source changed' });
+              return;
+            }
+          }
+        } finally {
+          try {
+            fs.closeSync(fd);
+          } catch {
+            /* already closed */
+          }
+        }
+      }
+
+      const lineBuf = Buffer.alloc(lineEnd - lineStart);
+      const fd2 = fs.openSync(file, 'r');
+      try {
+        fs.readSync(fd2, lineBuf, 0, lineBuf.length, lineStart);
+      } finally {
+        fs.closeSync(fd2);
+      }
+      const actualLineHash = createHash('sha256').update(lineBuf).digest('hex');
+      if (actualLineHash !== sourceLineHash) {
+        res.status(409).json({ error: 'source changed' });
+        return;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'source file read failed', message });
+      return;
+    }
   }
 
   res.setHeader('Cache-Control', 'no-store');
