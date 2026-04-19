@@ -1,16 +1,27 @@
-node_modules/
-dist/
-coverage/
-.peek/
-.peek-build/
+
+!.env.example
+# never commit user data
+*.log
 .DS_Store
 .env
 .env.*
-!.env.example
-*.log
-.vite/
+.peek-build/
+.peek-v03/
+.peek/
 .turbo/
+.vite/
+coverage/
+dist/
+node_modules/
 test-results/
-
-# never commit user data
 ~/.peek/
+
+# v0.3-launch scrub: dev artifacts, never track
+.peek-build/
+.peek-v03/
+
+# Real session fixtures are gitignored — drop your own at
+# tests/fixtures/isolated-claude-projects/real-session.jsonl to run
+# the fixture-dependent acceptance + integration tests locally.
+tests/fixtures/isolated-claude-projects/*.jsonl
+tests/fixtures/expected-counts.json

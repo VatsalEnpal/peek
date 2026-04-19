@@ -15,7 +15,7 @@
  *   Minimum 4 distinct SpanType values across the fixture.
  *   Ledger has > 50 entries with real content previews.
  *
- * This test imports the real-world fixture `biz-ops-real.jsonl` through the
+ * This test imports the real-world fixture `real-session.jsonl` through the
  * same `importPath` pipeline the running server uses, reads spans back via
  * `Store.listEvents()` (the read-path `/api/sessions/:id/events` itself uses),
  * and asserts each sub-clause of the DoD.
@@ -46,7 +46,7 @@ import { join } from 'node:path';
 import { importPath } from '../../server/pipeline/import';
 import { Store, type StoreEvent, type SpanRow } from '../../server/pipeline/store';
 
-const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl';
+const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/real-session.jsonl';
 
 /** Canonical SpanType values per server/pipeline/model.ts. */
 const SPAN_TYPE_ENUM = [
@@ -116,7 +116,7 @@ function selectTimelineSpans(events: StoreEvent[]): SpanEvent[] {
   return timeline;
 }
 
-describe('L1 GROUP DoD — v0.2 assembler + ledger on biz-ops-real.jsonl', () => {
+describe('L1 GROUP DoD — v0.2 assembler + ledger on real-session.jsonl', () => {
   const skipIfMissing = (): boolean => {
     if (!existsSync(REAL_FIXTURE)) {
       // eslint-disable-next-line no-console

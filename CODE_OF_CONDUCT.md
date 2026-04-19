@@ -18,6 +18,6 @@ Examples of behavior that contributes to a positive environment for our communit
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported via the repo's GitHub private security advisory flow: https://github.com/VatsalEnpal/peek-trace/security/advisories/new
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported via the repo's GitHub private security advisory flow: https://github.com/VatsalEnpal/peek/security/advisories/new
 
 This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.

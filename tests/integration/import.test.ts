@@ -3,7 +3,7 @@
  * that wires parser -> joiner -> model -> tokenizer -> redactor -> store.
  *
  * These tests use a tiny synthetic JSONL fixture (written to mkdtempSync) for
- * fast, deterministic coverage and also exercise the real biz-ops-real.jsonl
+ * fast, deterministic coverage and also exercise the real real-session.jsonl
  * fixture read-only so we prove the orchestrator works end-to-end on realistic
  * data. The real fixture is NEVER written to: we verify source byte-identity
  * with a hash check (mirrors the A1 acceptance contract).
@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { importPath } from '../../server/pipeline/import';
 import { Store } from '../../server/pipeline/store';
 
-const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl';
+const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/real-session.jsonl';
 
 function makeTinyJsonl(): string {
   const events = [
@@ -167,7 +167,7 @@ describe('importPath orchestrator', () => {
     expect(Array.isArray(result.driftWarnings)).toBe(true);
   });
 
-  test('imports the real biz-ops-real.jsonl fixture without modifying it', async () => {
+  test('imports the real real-session.jsonl fixture without modifying it', async () => {
     expect(existsSync(REAL_FIXTURE), `real fixture must exist at ${REAL_FIXTURE}`).toBe(true);
 
     const before = hashFile(REAL_FIXTURE);

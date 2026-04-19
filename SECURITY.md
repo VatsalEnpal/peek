@@ -2,7 +2,7 @@
 
 ## Reporting
 
-Report vulnerabilities via **GitHub's private security advisory flow** at https://github.com/VatsalEnpal/peek-trace/security/advisories/new.
+Report vulnerabilities via **GitHub's private security advisory flow** at https://github.com/VatsalEnpal/peek/security/advisories/new.
 
 **Do not** file public issues for vulnerabilities.
 

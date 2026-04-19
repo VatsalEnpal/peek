@@ -1,6 +1,6 @@
 /**
  * L1.5 integration — runtime token reconciliation wired into the import
- * orchestrator against the real `biz-ops-real.jsonl` fixture.
+ * orchestrator against the real `real-session.jsonl` fixture.
  *
  * Per the v0.2 builder plan line 177: "sum all child ActionSpans'
  * tokensConsumed; compare to Turn.usage totals; drift < 5% required per turn."
@@ -21,9 +21,9 @@ import { join } from 'node:path';
 import { importPath } from '../../server/pipeline/import';
 import type { Session } from '../../server/pipeline/model';
 
-const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl';
+const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/real-session.jsonl';
 
-describe('reconciliation on real fixture', () => {
+describe.skipIf(!existsSync(REAL_FIXTURE))('reconciliation on real fixture', () => {
   let dataDir: string;
 
   beforeEach(() => {
@@ -34,7 +34,7 @@ describe('reconciliation on real fixture', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  test('biz-ops-real.jsonl: per-turn reconciliation populated; report drift stats', async () => {
+  test('real-session.jsonl: per-turn reconciliation populated; report drift stats', async () => {
     expect(existsSync(REAL_FIXTURE), `real fixture must exist at ${REAL_FIXTURE}`).toBe(true);
 
     const session = (await importPath(REAL_FIXTURE, {

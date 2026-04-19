@@ -40,8 +40,8 @@ Peek is a screen recorder for your agents, but structured: events, not pixels. W
 **Prerequisites:** Node.js 22 or newer, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and run at least once (so `~/.claude/` exists).
 
 ```bash
-git clone https://github.com/VatsalEnpal/peek-trace.git
-cd peek-trace
+git clone https://github.com/VatsalEnpal/peek.git
+cd peek
 npm install
 npm run build
 node dist/bin/peek.js install

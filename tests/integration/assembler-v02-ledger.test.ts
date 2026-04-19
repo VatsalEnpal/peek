@@ -1,5 +1,5 @@
 /**
- * L1.3 integration — import the real biz-ops-real.jsonl fixture and assert the
+ * L1.3 integration — import the real real-session.jsonl fixture and assert the
  * v0.2 DoD for the assembler + ledger:
  *
  *   - Ledger has > 50 entries with real content previews (per plan line 171).
@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs';
 import { importPath } from '../../server/pipeline/import';
 import type { Session } from '../../server/pipeline/model';
 
-const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl';
+const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/real-session.jsonl';
 
 describe('L1 DoD — real fixture ledger + span coverage', () => {
   test('ledger has > 50 entries and each entry has a 64-hex sourceLineHash', async () => {

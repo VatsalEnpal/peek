@@ -5,7 +5,7 @@ Thank you for your interest in contributing.
 ## Quick start
 
 ```bash
-git clone https://github.com/VatsalEnpal/peek-trace.git
+git clone https://github.com/VatsalEnpal/peek.git
 cd peek-trace
 ./install.sh     # validates Node 22+, npm ci, platform checks
 npm test         # run all tests

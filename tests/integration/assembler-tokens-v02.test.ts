@@ -4,7 +4,7 @@
  * UI tokens column to always render `—`.
  *
  * Failure mode reproduced here without the HTTP layer:
- *   1. Run `importPath` against the real biz-ops-real.jsonl fixture (preview).
+ *   1. Run `importPath` against the real real-session.jsonl fixture (preview).
  *   2. Assert the assembled Session has numeric, > 0 `tokensConsumed` on every
  *      tool_call span that has a matching tool_result attached.
  *
@@ -21,7 +21,7 @@ import { importPath } from '../../server/pipeline/import';
 import { Store } from '../../server/pipeline/store';
 import type { Session } from '../../server/pipeline/model';
 
-const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl';
+const REAL_FIXTURE = './tests/fixtures/isolated-claude-projects/real-session.jsonl';
 
 describe('tokensConsumed on spans (checker finding 3)', () => {
   test('every tool_call span with a tool_result output has tokensConsumed > 0', async () => {

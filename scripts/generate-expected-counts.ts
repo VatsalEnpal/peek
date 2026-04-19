@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx/esm
 /**
- * Generate expected-counts.json from biz-ops-real.jsonl.
+ * Generate expected-counts.json from real-session.jsonl.
  * Script only — the current tests/fixtures/expected-counts.json was hand-seeded
  * and is protected by protect-files.sh. Re-running this script regenerates it
  * when the fixture is updated.
@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseJsonl } from '../server/pipeline/parser';
 
-const FIXTURE = resolve('tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl');
+const FIXTURE = resolve('tests/fixtures/isolated-claude-projects/real-session.jsonl');
 const OUT = resolve('tests/fixtures/expected-counts.json');
 
 type AssistantEvent = {
@@ -58,7 +58,7 @@ function main(): void {
 
   const out = {
     sessionId,
-    source: 'biz-ops-real.jsonl',
+    source: 'real-session.jsonl',
     note: 'Extracted from real Claude Code session. Ground truth for A2 acceptance test.',
     totalAssistantTurns: assistants.length,
     turnSample,
