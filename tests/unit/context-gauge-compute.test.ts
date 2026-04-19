@@ -34,6 +34,29 @@ function span(args: {
   };
 }
 
+/** Small helper for a turn-usage event. */
+function turn(args: {
+  id: string;
+  index?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+}): StoreEvent {
+  return {
+    kind: 'turn',
+    id: args.id,
+    sessionId: 'S',
+    index: args.index ?? 0,
+    usage: {
+      inputTokens: args.inputTokens ?? 0,
+      outputTokens: args.outputTokens ?? 0,
+      cacheCreationTokens: args.cacheCreationTokens ?? 0,
+      cacheReadTokens: args.cacheReadTokens ?? 0,
+    },
+  };
+}
+
 describe('computeContextGaugeStats', () => {
   it('returns zeros for an empty event list', () => {
     const out = computeContextGaugeStats([]);
@@ -114,6 +137,80 @@ describe('computeContextGaugeStats', () => {
     expect(out.cumulative).toBe(0);
     // Still one turn (A).
     expect(out.turnCount).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // L2.4 CRITICAL — the real-session drift bug.
+  //
+  // Spans only capture per-tool content tokens (e.g. "ls -la" = ~5 tokens).
+  // Real per-turn model usage includes system prompt + cached context +
+  // history + assistant reply — NOT attributed to spans. The gauge used to
+  // sum span.tokensConsumed per turn and compare to 200k, which on real CC
+  // sessions under-reports by ~40x (seen: 17,920 vs actual 738,732).
+  //
+  // Fix: when `turn` events are present with `usage`, the gauge reads the
+  // turn.usage sum — the same number `parentReported` carries in the
+  // reconciler (server/pipeline/self-check.ts line 110).
+  // -------------------------------------------------------------------------
+  it('REGRESSION: reads turn.usage when available (not span sum) — 99% drift scenario', () => {
+    // Real-session shape from the bug report:
+    //   - spans for turn T sum to 17,920 (tool content only)
+    //   - turn.usage totals 738,732 (input + output + cacheCreation + cacheRead)
+    // The gauge MUST report 738,732 — the number Claude Code's /usage shows.
+    const events: StoreEvent[] = [
+      turn({
+        id: 'T',
+        index: 0,
+        inputTokens: 2_000,
+        outputTokens: 4_732,
+        cacheCreationTokens: 12_000,
+        cacheReadTokens: 720_000,
+      }),
+      // A handful of spans in the same turn — their sum (17,920) would be
+      // the buggy pre-fix value.
+      span({ id: 's1', turnId: 'T', tokens: 5_000 }),
+      span({ id: 's2', turnId: 'T', tokens: 10_000 }),
+      span({ id: 's3', turnId: 'T', tokens: 2_920 }),
+    ];
+
+    const out = computeContextGaugeStats(events);
+    expect(out.maxPerTurn).toBe(738_732);
+    // Not the old span-sum value (17,920):
+    expect(out.maxPerTurn).not.toBe(17_920);
+    expect(out.maxPerTurn).toBeGreaterThanOrEqual(700_000);
+    expect(out.turnCount).toBe(1);
+  });
+
+  it('picks the max turn.usage total across multiple turns', () => {
+    const events: StoreEvent[] = [
+      turn({ id: 'A', index: 0, inputTokens: 50_000, outputTokens: 10_000 }),
+      turn({
+        id: 'B',
+        index: 1,
+        inputTokens: 100_000,
+        cacheReadTokens: 400_000,
+        outputTokens: 5_000,
+      }),
+      turn({ id: 'C', index: 2, inputTokens: 20_000 }),
+    ];
+
+    const out = computeContextGaugeStats(events);
+    // B is the max: 100k + 400k + 5k = 505k
+    expect(out.maxPerTurn).toBe(505_000);
+    expect(out.turnCount).toBe(3);
+  });
+
+  it('falls back to span-sum behavior when no turn events are present', () => {
+    // Legacy sessions imported before turn events were emitted should still
+    // render something sensible, even if imprecise.
+    const events: StoreEvent[] = [
+      span({ id: '1', turnId: 'A', tokens: 10_000 }),
+      span({ id: '2', turnId: 'A', tokens: 20_000 }),
+      span({ id: '3', turnId: 'B', tokens: 5_000 }),
+    ];
+    const out = computeContextGaugeStats(events);
+    expect(out.maxPerTurn).toBe(30_000);
+    expect(out.turnCount).toBe(2);
   });
 
   it('realistic case: max-per-turn is dramatically smaller than cumulative', () => {
