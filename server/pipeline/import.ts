@@ -157,9 +157,38 @@ function stringifyToolResultContent(content: unknown): string {
   }
 }
 
+/**
+ * Mirror of `stringifyContent` in model.ts (the assembler) for user-prompt
+ * content. MUST produce byte-identical output to `stringifyContent` so the
+ * redactMap key built here matches the lookup key the assembler later passes
+ * to `redactOf`/`tokenOf`. Previously this emitted `JSON.stringify(content)`
+ * for array shapes — that key never matched the text-extracted key model.ts
+ * uses, so redactMap.get() returned undefined and the assembler fell back to
+ * raw plaintext in the persisted ledger (A4 regression — v0.2 L5 fix).
+ */
 function stringifyUserPromptContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (content == null) return '';
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (typeof block === 'string') {
+        parts.push(block);
+      } else if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (typeof b.text === 'string') parts.push(b.text);
+        else if (typeof b.content === 'string') parts.push(b.content);
+        else {
+          try {
+            parts.push(JSON.stringify(b));
+          } catch {
+            parts.push(String(b));
+          }
+        }
+      }
+    }
+    return parts.join('\n');
+  }
   try {
     return JSON.stringify(content);
   } catch {

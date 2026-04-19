@@ -370,7 +370,9 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
             const target = toolUseIdToSpan.get(block.tool_use_id);
             if (target) {
               const outStr = stringifyContent(block.content);
-              target.outputs = outStr;
+              // Redact before persisting into span.outputs (A4 — no plaintext
+              // may land in the on-disk outputs_json column).
+              target.outputs = ctx.redactOf?.(outStr)?.redacted ?? outStr;
               // Record tool_result in ledger (content entering context).
               if (target.turnId) {
                 const tokens = addLedger(
@@ -393,7 +395,12 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
       currentTurn = turn;
 
       const promptText = typeof content === 'string' ? content : stringifyContent(content);
-      if (!session.firstPrompt) session.firstPrompt = promptText;
+      // Route plaintext through the session's redactOf closure before any of
+      // it lands in a persisted field. firstPrompt, span.inputs and the
+      // ledger entry are ALL dumped by Store.dumpAsText — any raw secret
+      // here breaks the A4 "no plaintext in DB" contract (v0.2 L5 fix).
+      const promptRedacted = ctx.redactOf?.(promptText)?.redacted ?? promptText;
+      if (!session.firstPrompt) session.firstPrompt = promptRedacted;
       if (!session.startTs) session.startTs = evt.timestamp;
 
       const promptSpan: ActionSpan = {
@@ -404,7 +411,7 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
         childSpanIds: [],
         startTs: evt.timestamp,
         tokensConsumed: 0,
-        inputs: promptText,
+        inputs: promptRedacted,
       };
       spans.push(promptSpan);
 
@@ -504,13 +511,20 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
           tokensConsumed: 0,
         };
 
-        // Populate inputs/outputs.
+        // Populate inputs/outputs. Route plaintext through redactOf so no raw
+        // secret ever lands in `inputs_json` / `outputs_json` on disk (A4).
+        const outputRedacted = ctx.redactOf?.(contentStr)?.redacted ?? contentStr;
         if (block?.type === 'text') {
-          span.outputs = contentStr;
+          span.outputs = outputRedacted;
         } else if (block?.type === 'thinking') {
-          span.outputs = contentStr;
+          span.outputs = outputRedacted;
         } else if (block?.type === 'tool_use') {
-          span.inputs = block.input ?? {};
+          // Tool-use inputs are a structured object (filename, command, etc.)
+          // We redact the stringified form and store that so persisted JSON
+          // never reveals secret flags/args.
+          const inputStr = stringifyContent(block.input ?? {});
+          const inputRedacted = ctx.redactOf?.(inputStr)?.redacted ?? inputStr;
+          span.inputs = inputRedacted;
           if (typeof block.id === 'string') {
             toolUseIdToSpan.set(block.id, span);
             span.metadata = { ...(span.metadata ?? {}), toolUseId: block.id };
@@ -551,16 +565,20 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
       };
 
       const atype = evt.attachment?.type;
+      const redactStr = (s: unknown): unknown =>
+        typeof s === 'string' ? (ctx.redactOf?.(s)?.redacted ?? s) : s;
       if (atype === 'hook_success' || atype === 'hook_additional_context') {
+        // Redact every string field of the hook payload individually so
+        // secrets in stdout/stderr never land in persisted outputs_json (A4).
         span.outputs = {
-          command: evt.attachment?.command,
-          content: evt.attachment?.content,
-          stdout: evt.attachment?.stdout,
-          stderr: evt.attachment?.stderr,
+          command: redactStr(evt.attachment?.command),
+          content: redactStr(evt.attachment?.content),
+          stdout: redactStr(evt.attachment?.stdout),
+          stderr: redactStr(evt.attachment?.stderr),
           exitCode: evt.attachment?.exitCode,
         };
       } else if (atype === 'skill_listing') {
-        span.outputs = evt.attachment?.content;
+        span.outputs = redactStr(evt.attachment?.content);
       } else {
         span.metadata = { ...(span.metadata ?? {}), rawEvent: evt };
       }
