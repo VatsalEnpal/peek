@@ -6,13 +6,12 @@ import type { ReactElement } from 'react';
  * input, Import button, keyboard hint, meta line, date-grouped sessions with
  * slug-first rows, clickable links into `/session/:id`.
  *
- * Scope of this tick (L2.2):
- *   - The search input is **present and controlled** but its filter logic is
- *     deferred to L2.4. We still bind `value`/`onChange` so keyboard users can
- *     type without losing characters.
- *   - Bookmark nesting within session cards is deferred to L2.5.
- *   - ImportWizard polish is deferred to L2.3 — we reuse the existing
- *     `ImportDialog` so the button is real, not a stub.
+ * L2.3: ImportDialog is a full wizard with checkbox selection + progress.
+ * L2.4: The search input filters sessions locally by prompt text, slug, and
+ *   git branch (case-insensitive substring match). Empty query → all rows.
+ * L2.5: Each session row has a chevron that lazily fetches and renders its
+ *   bookmarks as a nested sub-list. Expansion state lives in local component
+ *   state so navigation resets it — intentional.
  *
  * Slug policy (MOCKUP invariant):
  *   - Render `session.slug` when non-empty.
@@ -25,7 +24,9 @@ import { Link } from 'react-router-dom';
 
 import { ImportDialog } from '../components/ImportDialog';
 import { useSessionStore, type SessionSummary } from '../stores/session';
+import { useBookmarksStore } from '../stores/bookmarks';
 import { truncate } from '../lib/format';
+import type { BookmarkDto } from '../lib/api';
 
 type DateBucket = 'active' | 'today' | 'yesterday' | 'earlier';
 
@@ -73,6 +74,26 @@ function promptPreview(s: SessionSummary): string {
   return truncate(raw, 96);
 }
 
+/**
+ * Case-insensitive substring match across prompt, slug, and branch.
+ *
+ * Exported so the unit test can exercise the same predicate the page uses.
+ */
+export function sessionMatches(s: SessionSummary, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (q.length === 0) return true;
+  const haystacks: string[] = [];
+  if (s.firstPrompt) haystacks.push(s.firstPrompt);
+  if (s.slug) haystacks.push(s.slug);
+  if (s.gitBranch) haystacks.push(s.gitBranch);
+  if (s.label) haystacks.push(s.label);
+  haystacks.push(s.id); // still searchable by hex id
+  for (const h of haystacks) {
+    if (h.toLowerCase().includes(q)) return true;
+  }
+  return false;
+}
+
 /** Formatter for the context bar ratio. Hard-coded 200k ceiling for v0.2. */
 const CONTEXT_CEILING = 200_000;
 
@@ -84,12 +105,18 @@ export function SessionsPage(): ReactElement {
 
   const [search, setSearch] = useState<string>('');
   const [importOpen, setImportOpen] = useState<boolean>(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     void fetchSessions();
   }, [fetchSessions]);
 
-  const grouped = useMemo(() => groupSessions(sessions), [sessions]);
+  const filtered = useMemo(
+    () => sessions.filter((s) => sessionMatches(s, search)),
+    [sessions, search]
+  );
+
+  const grouped = useMemo(() => groupSessions(filtered), [filtered]);
   const totalSpans = useMemo(
     () => sessions.reduce((n, s) => n + (s.turnCount ?? 0), 0),
     [sessions]
@@ -98,6 +125,19 @@ export function SessionsPage(): ReactElement {
     () => sessions.reduce((n, s) => n + (s.totalTokens ?? 0), 0),
     [sessions]
   );
+
+  const toggleExpand = (id: string): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const hasQuery = search.trim().length > 0;
+  const hasNoMatches =
+    sessions.length > 0 && filtered.length === 0 && hasQuery && sessionsError === null;
 
   return (
     <div
@@ -221,7 +261,11 @@ export function SessionsPage(): ReactElement {
               borderBottom: '1px solid var(--peek-border)',
             }}
           >
-            <b style={{ color: 'var(--peek-fg)', fontWeight: 500 }}>{sessions.length} sessions</b>
+            <b style={{ color: 'var(--peek-fg)', fontWeight: 500 }}>
+              {hasQuery
+                ? `${filtered.length} / ${sessions.length} sessions`
+                : `${sessions.length} sessions`}
+            </b>
             {' · '}
             {totalSpans.toLocaleString('en-US')} turns
             {' · '}
@@ -258,6 +302,21 @@ export function SessionsPage(): ReactElement {
             </div>
           )}
 
+          {hasNoMatches && (
+            <div
+              data-testid="sessions-no-matches"
+              style={{
+                padding: '48px 24px',
+                color: 'var(--peek-fg-faint)',
+                fontSize: 'var(--peek-fs-sm)',
+                textAlign: 'center',
+                letterSpacing: '0.04em',
+              }}
+            >
+              no matches for &ldquo;{search.trim()}&rdquo;
+            </div>
+          )}
+
           {/* ── grouped session rows ── */}
           {BUCKET_ORDER.map((bucket) => {
             const rows = grouped[bucket];
@@ -287,7 +346,12 @@ export function SessionsPage(): ReactElement {
                   />
                 </div>
                 {rows.map((s) => (
-                  <SessionRow key={s.id} session={s} />
+                  <SessionRow
+                    key={s.id}
+                    session={s}
+                    expanded={expanded.has(s.id)}
+                    onToggle={(): void => toggleExpand(s.id)}
+                  />
                 ))}
               </div>
             );
@@ -318,131 +382,339 @@ export function SessionsPage(): ReactElement {
 }
 
 /** Single session row — entire card is a clickable Link to /session/:id. */
-function SessionRow({ session: s }: { session: SessionSummary }): ReactElement {
+function SessionRow({
+  session: s,
+  expanded,
+  onToggle,
+}: {
+  session: SessionSummary;
+  expanded: boolean;
+  onToggle: () => void;
+}): ReactElement {
   const ratio = Math.min(1, Math.max(0, s.totalTokens / CONTEXT_CEILING));
   const barPct = `${Math.round(ratio * 100)}%`;
 
   return (
+    <>
+      <div
+        data-testid={`session-wrap-${s.id}`}
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '20px 1fr',
+          alignItems: 'stretch',
+        }}
+      >
+        {/* Chevron column — a real button so keyboard users can toggle without
+            triggering the enclosing Link's navigation. */}
+        <button
+          type="button"
+          data-testid={`session-expand-${s.id}`}
+          aria-label={
+            expanded
+              ? `collapse bookmarks for ${displaySlug(s)}`
+              : `expand bookmarks for ${displaySlug(s)}`
+          }
+          aria-expanded={expanded}
+          onClick={(e): void => {
+            e.stopPropagation();
+            e.preventDefault();
+            onToggle();
+          }}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: expanded ? 'var(--peek-accent)' : 'var(--peek-fg-faint)',
+            fontSize: 10,
+            cursor: 'pointer',
+            padding: 0,
+            width: 20,
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'transform 120ms ease',
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0)',
+            transformOrigin: 'center',
+          }}
+        >
+          ▸
+        </button>
+
+        <Link
+          to={`/session/${encodeURIComponent(s.id)}`}
+          data-testid={`session-row-${s.id}`}
+          data-session-id={s.id}
+          aria-label={`open session ${displaySlug(s)}`}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr auto',
+            gap: '8px 24px',
+            padding: '14px 24px 14px 4px',
+            borderBottom: '1px solid transparent',
+            borderLeft: '2px solid transparent',
+            cursor: 'pointer',
+            textDecoration: 'none',
+            color: 'inherit',
+          }}
+          onMouseEnter={(e): void => {
+            e.currentTarget.style.background = 'var(--peek-surface-2)';
+            e.currentTarget.style.borderLeftColor = 'var(--peek-accent)';
+          }}
+          onMouseLeave={(e): void => {
+            e.currentTarget.style.background = '';
+            e.currentTarget.style.borderLeftColor = 'transparent';
+          }}
+        >
+          <div
+            data-testid="session-slug"
+            style={{
+              color: 'var(--peek-fg)',
+              fontWeight: 500,
+              fontFamily: 'var(--peek-font-mono)',
+              fontSize: 'var(--peek-fs-md)',
+            }}
+          >
+            {displaySlug(s)}
+          </div>
+
+          <div
+            data-testid="session-time"
+            style={{
+              gridColumn: 2,
+              gridRow: 1,
+              color: 'var(--peek-fg-faint)',
+              fontSize: 'var(--peek-fs-xs)',
+              textAlign: 'right',
+              whiteSpace: 'nowrap',
+              fontFamily: 'var(--peek-font-mono)',
+            }}
+          >
+            {s.timeAgo}
+          </div>
+
+          <div
+            style={{
+              gridColumn: 1,
+              fontFamily: '"Fraunces", Georgia, serif',
+              fontSize: 'var(--peek-fs-lg)',
+              fontStyle: 'italic',
+              color: 'var(--peek-fg-dim)',
+              letterSpacing: '-0.005em',
+            }}
+          >
+            &ldquo;{promptPreview(s)}&rdquo;
+          </div>
+
+          <div
+            data-testid="session-meta"
+            style={{
+              gridColumn: 1,
+              color: 'var(--peek-fg-faint)',
+              fontSize: 'var(--peek-fs-xs)',
+              letterSpacing: '0.03em',
+              fontFamily: 'var(--peek-font-mono)',
+            }}
+          >
+            <span>{s.gitBranch ?? 'no-branch'}</span>
+            <span style={{ color: 'var(--peek-border)' }}> · </span>
+            <span>{s.turnCount.toLocaleString('en-US')} turns</span>
+          </div>
+
+          <div
+            style={{
+              gridColumn: 2,
+              gridRow: '2 / span 2',
+              alignSelf: 'end',
+              fontSize: 'var(--peek-fs-xs)',
+              color: 'var(--peek-fg-faint)',
+              textAlign: 'right',
+              fontFamily: 'var(--peek-font-mono)',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'inline-block',
+                width: 100,
+                height: 3,
+                background: 'var(--peek-border)',
+                marginRight: 8,
+                verticalAlign: 'middle',
+                position: 'relative',
+                overflow: 'hidden',
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: barPct,
+                  background: 'var(--peek-accent)',
+                }}
+              />
+            </span>
+            <span>
+              {s.totalTokens.toLocaleString('en-US')} / {CONTEXT_CEILING.toLocaleString('en-US')}
+            </span>
+          </div>
+        </Link>
+      </div>
+
+      {expanded && <BookmarkList sessionId={s.id} />}
+    </>
+  );
+}
+
+/**
+ * Lazily-fetched bookmark list rendered under an expanded session row.
+ *
+ * Uses `useBookmarksStore` so multiple expansions of the same session don't
+ * refetch, and so a future bookmark-create action can invalidate the cache
+ * cleanly.
+ */
+function BookmarkList({ sessionId }: { sessionId: string }): ReactElement {
+  const bms = useBookmarksStore((s) => s.bySession[sessionId]);
+  const loading = useBookmarksStore((s) => s.loading);
+  const error = useBookmarksStore((s) => s.error);
+  const fetchForSession = useBookmarksStore((s) => s.fetchForSession);
+
+  useEffect(() => {
+    void fetchForSession(sessionId);
+  }, [sessionId, fetchForSession]);
+
+  if (bms === undefined) {
+    return (
+      <div
+        data-testid={`bookmarks-loading-${sessionId}`}
+        style={{
+          padding: '6px 24px 6px 48px',
+          color: 'var(--peek-fg-faint)',
+          fontSize: 'var(--peek-fs-xs)',
+          fontFamily: 'var(--peek-font-mono)',
+        }}
+      >
+        {loading ? 'loading bookmarks…' : error !== null ? `error: ${error}` : 'loading…'}
+      </div>
+    );
+  }
+
+  if (bms.length === 0) {
+    return (
+      <div
+        data-testid={`bookmarks-empty-${sessionId}`}
+        style={{
+          padding: '6px 24px 6px 48px',
+          color: 'var(--peek-fg-faint)',
+          fontSize: 'var(--peek-fs-xs)',
+          fontStyle: 'italic',
+          fontFamily: 'var(--peek-font-mono)',
+        }}
+      >
+        (no bookmarks)
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid={`bookmarks-list-${sessionId}`}>
+      {bms.map((b) => (
+        <BookmarkRow key={b.id} sessionId={sessionId} bookmark={b} />
+      ))}
+    </div>
+  );
+}
+
+function BookmarkRow({
+  sessionId,
+  bookmark: b,
+}: {
+  sessionId: string;
+  bookmark: BookmarkDto;
+}): ReactElement {
+  // Bookmarks carry startTs/endTs but not always a spanId. If the bookmark
+  // metadata contains an anchor spanId (future-proofing), deep-link to the
+  // Inspector; otherwise fall back to the session detail page.
+  const anchorSpanId = readAnchorSpanId(b);
+  const href =
+    anchorSpanId !== null
+      ? `/session/${encodeURIComponent(sessionId)}/span/${encodeURIComponent(anchorSpanId)}`
+      : `/session/${encodeURIComponent(sessionId)}`;
+  const source = (b.source ?? 'bookmark').toUpperCase();
+  const label = b.label ?? '(unnamed)';
+  const ts = b.startTs ?? '';
+
+  return (
     <Link
-      to={`/session/${encodeURIComponent(s.id)}`}
-      data-testid={`session-row-${s.id}`}
-      data-session-id={s.id}
-      aria-label={`open session ${displaySlug(s)}`}
+      to={href}
+      data-testid={`bookmark-row-${b.id}`}
       style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr auto',
-        gap: '8px 24px',
-        padding: '14px 24px',
-        borderBottom: '1px solid transparent',
-        borderLeft: '2px solid transparent',
-        cursor: 'pointer',
+        display: 'flex',
+        gap: 12,
+        alignItems: 'baseline',
+        padding: '6px 24px 6px 48px',
+        color: 'var(--peek-fg-dim)',
+        fontSize: 'var(--peek-fs-xs)',
+        fontFamily: 'var(--peek-font-mono)',
         textDecoration: 'none',
-        color: 'inherit',
+        borderLeft: '2px solid var(--peek-border)',
+        marginLeft: 20,
+        background: 'transparent',
       }}
       onMouseEnter={(e): void => {
         e.currentTarget.style.background = 'var(--peek-surface-2)';
         e.currentTarget.style.borderLeftColor = 'var(--peek-accent)';
       }}
       onMouseLeave={(e): void => {
-        e.currentTarget.style.background = '';
-        e.currentTarget.style.borderLeftColor = 'transparent';
+        e.currentTarget.style.background = 'transparent';
+        e.currentTarget.style.borderLeftColor = 'var(--peek-border)';
       }}
     >
-      <div
-        data-testid="session-slug"
+      <span
+        style={{
+          color: 'var(--peek-fg-faint)',
+          fontSize: 10,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          minWidth: 64,
+        }}
+      >
+        {source}
+      </span>
+      <span
         style={{
           color: 'var(--peek-fg)',
           fontWeight: 500,
-          fontFamily: 'var(--peek-font-mono)',
-          fontSize: 'var(--peek-fs-md)',
-        }}
-      >
-        {displaySlug(s)}
-      </div>
-
-      <div
-        data-testid="session-time"
-        style={{
-          gridColumn: 2,
-          gridRow: 1,
-          color: 'var(--peek-fg-faint)',
-          fontSize: 'var(--peek-fs-xs)',
-          textAlign: 'right',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
-          fontFamily: 'var(--peek-font-mono)',
         }}
       >
-        {s.timeAgo}
-      </div>
-
-      <div
-        style={{
-          gridColumn: 1,
-          fontFamily: '"Fraunces", Georgia, serif',
-          fontSize: 'var(--peek-fs-lg)',
-          fontStyle: 'italic',
-          color: 'var(--peek-fg-dim)',
-          letterSpacing: '-0.005em',
-        }}
-      >
-        &ldquo;{promptPreview(s)}&rdquo;
-      </div>
-
-      <div
-        data-testid="session-meta"
-        style={{
-          gridColumn: 1,
-          color: 'var(--peek-fg-faint)',
-          fontSize: 'var(--peek-fs-xs)',
-          letterSpacing: '0.03em',
-          fontFamily: 'var(--peek-font-mono)',
-        }}
-      >
-        <span>{s.gitBranch ?? 'no-branch'}</span>
-        <span style={{ color: 'var(--peek-border)' }}> · </span>
-        <span>{s.turnCount.toLocaleString('en-US')} turns</span>
-      </div>
-
-      <div
-        style={{
-          gridColumn: 2,
-          gridRow: '2 / span 2',
-          alignSelf: 'end',
-          fontSize: 'var(--peek-fs-xs)',
-          color: 'var(--peek-fg-faint)',
-          textAlign: 'right',
-          fontFamily: 'var(--peek-font-mono)',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
+        {label}
+      </span>
+      {ts.length > 0 && (
         <span
-          aria-hidden="true"
           style={{
-            display: 'inline-block',
-            width: 100,
-            height: 3,
-            background: 'var(--peek-border)',
-            marginRight: 8,
-            verticalAlign: 'middle',
-            position: 'relative',
-            overflow: 'hidden',
+            color: 'var(--peek-fg-faint)',
+            fontSize: 10,
+            fontVariantNumeric: 'tabular-nums',
           }}
         >
-          <span
-            style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: barPct,
-              background: 'var(--peek-accent)',
-            }}
-          />
+          {ts}
         </span>
-        <span>
-          {s.totalTokens.toLocaleString('en-US')} / {CONTEXT_CEILING.toLocaleString('en-US')}
-        </span>
-      </div>
+      )}
     </Link>
   );
+}
+
+/** Read an anchor spanId from a bookmark's metadata, if present. */
+function readAnchorSpanId(b: BookmarkDto): string | null {
+  const m = b.metadata;
+  if (!m || typeof m !== 'object') return null;
+  const candidate =
+    (m as Record<string, unknown>)['anchorSpanId'] ?? (m as Record<string, unknown>)['spanId'];
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
 }
