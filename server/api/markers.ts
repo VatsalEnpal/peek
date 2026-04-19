@@ -21,14 +21,47 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response, type NextFunction } from 'express';
 
 import type { Store, BookmarkRow } from '../pipeline/store';
 import { broadcast } from './sse';
 
 const LIVE_SENTINEL_SESSION_ID = 'live';
 
+// C2 from code review: the slash-command flow pipes an attacker-controlled
+// `name` into a curl body. The server-side validation here is defense-in-depth
+// against any caller (not just the Claude Code slash commands):
+//   - NAME_MAX_LENGTH caps label size at 256 UTF-16 code units (matches the
+//     bookmark UI's visual budget)
+//   - SESSION_ID_MAX_LENGTH bounds the FK column length so pathologically
+//     long ids can't bloat the DB
+//   - BODY_BYTE_LIMIT is a per-router cap (global express.json is 50mb for
+//     large imports; markers should never need more than a handful of bytes)
+const NAME_MAX_LENGTH = 256;
+const SESSION_ID_MAX_LENGTH = 128;
+const BODY_BYTE_LIMIT = '16kb';
+
 const router = Router();
+
+// Per-router body limit. 413 is returned for payloads above 16kb; this
+// intentionally does NOT inherit the 50mb limit on the global parser.
+router.use(express.json({ limit: BODY_BYTE_LIMIT }));
+
+// Enforce Content-Type: application/json — `express.json` silently skips
+// non-matching requests, which would leave req.body === {} and bypass the
+// real validation logic. Reject early with 400.
+router.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.method !== 'POST') {
+    next();
+    return;
+  }
+  const ct = req.headers['content-type'] ?? '';
+  if (typeof ct !== 'string' || !ct.toLowerCase().includes('application/json')) {
+    res.status(400).json({ error: "Content-Type must be 'application/json'" });
+    return;
+  }
+  next();
+});
 
 type MarkerRequestBody = {
   type?: unknown;
@@ -42,6 +75,26 @@ router.post('/', (req: Request, res: Response) => {
   const type = body.type;
   if (type !== 'start' && type !== 'end') {
     res.status(400).json({ error: "body must include type: 'start' | 'end'" });
+    return;
+  }
+  // sessionId validation: bound length BEFORE falling back to the sentinel so
+  // a malicious client can't sneak a 10MB string past by also omitting some
+  // other field.
+  if (body.sessionId !== undefined && typeof body.sessionId !== 'string') {
+    res.status(400).json({ error: 'sessionId must be a string' });
+    return;
+  }
+  if (typeof body.sessionId === 'string' && body.sessionId.length > SESSION_ID_MAX_LENGTH) {
+    res.status(400).json({ error: `sessionId exceeds ${SESSION_ID_MAX_LENGTH} chars` });
+    return;
+  }
+  // name validation: must be string if present, length-capped.
+  if (body.name !== undefined && typeof body.name !== 'string') {
+    res.status(400).json({ error: 'name must be a string' });
+    return;
+  }
+  if (typeof body.name === 'string' && body.name.length > NAME_MAX_LENGTH) {
+    res.status(400).json({ error: `name exceeds ${NAME_MAX_LENGTH} chars` });
     return;
   }
   const store = req.app.locals.store as Store;

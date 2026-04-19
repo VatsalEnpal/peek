@@ -18,12 +18,15 @@ Argument: `$ARGUMENTS` — the bookmark name (optional, but recommended).
 
 1. Run this single Bash command exactly once. The port defaults to 7335 but
    honors `$PEEK_PORT` if set in the environment. The timestamp is captured
-   as UTC in ISO-8601.
+   as UTC in ISO-8601. JSON encoding happens inside `python3` so a bookmark
+   name containing `"`, `$`, or any other shell-hostile character is treated
+   as a plain string (no shell/JSON injection).
 
    ```bash
-   curl -sf -X POST "http://localhost:${PEEK_PORT:-7335}/api/markers" \
+   BODY="$(python3 -c 'import json,sys; print(json.dumps({"type":"start","name":sys.argv[1],"timestamp":sys.argv[2]}))' "$ARGUMENTS" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+   curl -sf -X POST "http://127.0.0.1:${PEEK_PORT:-7335}/api/markers" \
      -H 'Content-Type: application/json' \
-     -d "{\"type\":\"start\",\"name\":\"$ARGUMENTS\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+     --data-raw "$BODY"
    ```
 
 2. Read the command's exit code:

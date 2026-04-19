@@ -17,11 +17,15 @@ Takes no arguments.
 
 1. Run this single Bash command exactly once. The port defaults to 7335 but
    honors `$PEEK_PORT` if set. The timestamp is captured as UTC in ISO-8601.
+   The body is encoded via `python3` for symmetry with `/peek_start` — this
+   command takes no arguments today, but the defensive shape protects
+   against any future additions that might embed user input.
 
    ```bash
-   curl -sf -X POST "http://localhost:${PEEK_PORT:-7335}/api/markers" \
+   BODY="$(python3 -c 'import json,sys; print(json.dumps({"type":"end","timestamp":sys.argv[1]}))' "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+   curl -sf -X POST "http://127.0.0.1:${PEEK_PORT:-7335}/api/markers" \
      -H 'Content-Type: application/json' \
-     -d "{\"type\":\"end\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+     --data-raw "$BODY"
    ```
 
 2. Read the command's exit code:
