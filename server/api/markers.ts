@@ -26,6 +26,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import type { Store, BookmarkRow } from '../pipeline/store';
 import { broadcast } from './sse';
 import { getCurrentSessionId } from '../cli/current-session';
+import { processMarker } from './marker-lifecycle';
 
 const LIVE_SENTINEL_SESSION_ID = 'live';
 
@@ -69,7 +70,10 @@ type MarkerRequestBody = {
   name?: unknown;
   sessionId?: unknown;
   timestamp?: unknown;
+  requestId?: unknown;
 };
+
+const REQUEST_ID_MAX_LENGTH = 128;
 
 router.post('/', (req: Request, res: Response) => {
   const body = (req.body ?? {}) as MarkerRequestBody;
@@ -98,6 +102,14 @@ router.post('/', (req: Request, res: Response) => {
     res.status(400).json({ error: `name exceeds ${NAME_MAX_LENGTH} chars` });
     return;
   }
+  if (body.requestId !== undefined && typeof body.requestId !== 'string') {
+    res.status(400).json({ error: 'requestId must be a string' });
+    return;
+  }
+  if (typeof body.requestId === 'string' && body.requestId.length > REQUEST_ID_MAX_LENGTH) {
+    res.status(400).json({ error: `requestId exceeds ${REQUEST_ID_MAX_LENGTH} chars` });
+    return;
+  }
   const store = req.app.locals.store as Store;
 
   // L11a session resolution order:
@@ -124,7 +136,9 @@ router.post('/', (req: Request, res: Response) => {
     }
   }
   const ts = typeof body.timestamp === 'string' ? body.timestamp : new Date().toISOString();
-  const name = typeof body.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : undefined;
+  const name =
+    typeof body.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : undefined;
+  const requestId = typeof body.requestId === 'string' ? body.requestId : undefined;
 
   // Auto-seed the session row for the bookmarks FK, BUT only when:
   //   (a) the caller didn't use a watcher-detected id (the watcher already
@@ -146,6 +160,14 @@ router.post('/', (req: Request, res: Response) => {
   }
 
   if (type === 'start') {
+    // v0.3 L1.3: marker also starts/replaces a Recording for the session.
+    processMarker(
+      store,
+      { type: 'start', name, sessionId, timestamp: ts, requestId },
+      { broadcast }
+    );
+
+    // Bookmark row for back-compat with the legacy sessions view.
     const row: BookmarkRow = {
       id: randomUUID(),
       sessionId,
@@ -159,6 +181,9 @@ router.post('/', (req: Request, res: Response) => {
     res.status(201).json(wire);
     return;
   }
+
+  // v0.3 L1.3: marker also closes the Recording for the session.
+  processMarker(store, { type: 'end', sessionId, timestamp: ts, requestId }, { broadcast });
 
   // type === 'end' — locate the most recent open marker (source='marker',
   // endTs undefined) for this session and close it. If none exists, persist
