@@ -122,7 +122,11 @@ describe('RecordButton label prompt (L3.5)', () => {
   it('clicking rec opens an inline prompt pre-filled with the last user_prompt', async () => {
     render(<RecordButton />);
     const btn = screen.getByTestId('record-button');
-    expect(btn.textContent?.toLowerCase()).toMatch(/rec/);
+    // L2.5: button label renamed from 'rec' to 'bookmark range'.
+    expect(btn.textContent?.toLowerCase()).toMatch(/bookmark/);
+    expect(btn.getAttribute('title')?.toLowerCase()).toContain(
+      'mark a slice of this session'
+    );
     // Nothing posted yet.
     expect(postedBody).toBeNull();
 

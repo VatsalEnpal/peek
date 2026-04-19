@@ -240,7 +240,8 @@ describe('RecordButton', () => {
     render(<RecordButton />);
 
     const btn = screen.getByTestId('record-button');
-    expect(btn.textContent).toMatch(/rec/i);
+    // L2.5 — button label is "BOOKMARK RANGE" not "REC".
+    expect(btn.textContent?.toLowerCase()).toMatch(/bookmark/);
 
     // Click opens the inline label prompt dialog.
     await act(async () => {

@@ -159,15 +159,23 @@ export function RecordButton(): ReactElement {
   };
 
   const elapsedMs = startTs ? now - Date.parse(startTs) : 0;
-  const label = isRecording ? 'stop' : 'rec';
+  // L2.5 — rename 'REC' → 'BOOKMARK RANGE'. This button is *retroactive only*
+  // (mark a slice of a session already in the DB) — it does NOT start live
+  // recording. The tooltip spells that out so users don't conflate it with the
+  // upcoming `/peek_start` slash command, which is a distinct live-mode flow.
+  const label = isRecording ? 'stop' : 'bookmark range';
+  const tooltip = isRecording
+    ? 'stop this bookmark range'
+    : 'Mark a slice of this session for later review';
 
   return (
     <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
       <button
         type="button"
         data-testid="record-button"
+        title={tooltip}
         aria-pressed={isRecording}
-        aria-label={isRecording ? 'stop recording' : 'start recording'}
+        aria-label={isRecording ? 'stop recording' : 'bookmark range — mark a slice of this session for later review'}
         onClick={(): void => {
           void onClick();
         }}
