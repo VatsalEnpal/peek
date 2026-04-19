@@ -175,8 +175,27 @@ const THINKING_TOKEN_THRESHOLD = 500;
 const COMMAND_TAG_RE =
   /<(?:local-command-caveat|command-name|command-message|command-args)>[\s\S]*?<\/(?:local-command-caveat|command-name|command-message|command-args)>/g;
 
+/**
+ * Claude Code injects a SKILL body preamble after expanding a slash command:
+ *
+ *   # /peek_start — Open a Peek bookmark range
+ *
+ *   This skill opens …
+ *
+ * It arrives as a user_prompt event but represents the skill's own markdown,
+ * not anything the user typed. Skipping it (v0.3 L5.3) keeps the session's
+ * firstPrompt anchored to real user intent.
+ */
+const SKILL_BODY_RE = /^\s*#\s+\/[a-zA-Z_][\w-]*\s*(?:—|--)/;
+
+function isSkillBodyMarkdown(promptText: string): boolean {
+  return SKILL_BODY_RE.test(promptText);
+}
+
 function isCommandOnly(promptText: string): boolean {
-  return promptText.replace(COMMAND_TAG_RE, '').trim().length === 0;
+  if (promptText.replace(COMMAND_TAG_RE, '').trim().length === 0) return true;
+  if (isSkillBodyMarkdown(promptText)) return true;
+  return false;
 }
 
 /** Extract the command name from a command-only prompt, e.g. "/peek_start". */

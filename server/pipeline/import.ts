@@ -399,7 +399,23 @@ function precomputeRedactions(
 // Store persistence
 // ---------------------------------------------------------------------------
 
-function persistSession(store: Store, session: Session, salt: string): void {
+/**
+ * L5.1 — yield cadence for the hot persistSession loops. Every N iterations
+ * we `await setImmediate(...)` so the Node event loop can service queued
+ * HTTP requests (healthz, SSE flushes) during a bulk import.
+ *
+ * Exported so tests can assert the yield behaviour without duplicating the
+ * magic number.
+ */
+export const YIELD_EVERY = 50;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+async function persistSession(store: Store, session: Session, salt: string): Promise<void> {
   const sessionRow: SessionRow = {
     id: session.id,
     salt,
@@ -426,7 +442,8 @@ function persistSession(store: Store, session: Session, salt: string): void {
     store.putTurn(row);
   }
 
-  for (const span of session.spans) {
+  for (let i = 0; i < session.spans.length; i++) {
+    const span = session.spans[i];
     const row: SpanRow = {
       id: span.id,
       sessionId: session.id,
@@ -447,9 +464,11 @@ function persistSession(store: Store, session: Session, salt: string): void {
     if (span.outputs !== undefined) row.outputs = span.outputs;
     if (span.metadata !== undefined) row.metadata = span.metadata;
     store.putSpan(row);
+    if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop();
   }
 
-  for (const entry of session.ledger) {
+  for (let i = 0; i < session.ledger.length; i++) {
+    const entry = session.ledger[i];
     const row: LedgerEntryRow = {
       id: entry.id,
       sessionId: session.id,
@@ -462,8 +481,12 @@ function persistSession(store: Store, session: Session, salt: string): void {
     if (entry.sourceOffset !== undefined) row.sourceOffset = entry.sourceOffset;
     if (entry.ts !== undefined) row.ts = entry.ts;
     store.putLedgerEntry(row);
+    if ((i + 1) % YIELD_EVERY === 0) await yieldToEventLoop();
   }
 }
+
+/** Test-only re-export. Keeps `persistSession` private to the module. */
+export const persistSessionForTests = persistSession;
 
 // ---------------------------------------------------------------------------
 // Per-file import
@@ -676,7 +699,7 @@ export async function importPath(
     const store = new Store(dataDir);
     try {
       for (const { session, salt, rawEvents } of perFile) {
-        persistSession(store, session, salt);
+        await persistSession(store, session, salt);
         // Detect @peek-start/@peek-end marker bookmarks from the user-text
         // stream and persist each as a marker-sourced bookmark.
         const markers = detectMarkers(session, rawEvents as unknown[]);
