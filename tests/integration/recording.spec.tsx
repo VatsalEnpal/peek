@@ -356,6 +356,87 @@ describe('SessionPicker sub-picker', () => {
   });
 });
 
+describe('Timeline focus-range dim (BUG-5)', () => {
+  it('no focus range → all rows render at full opacity', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('timeline-row').length).toBeGreaterThan(0);
+    });
+    const rows = screen.getAllByTestId('timeline-row');
+    for (const row of rows) {
+      const wrapper = row.parentElement!;
+      const op = wrapper.style.opacity;
+      // Default focusRange = {} → inFocusRange returns true → opacity ''/1.
+      expect(op === '' || op === '1').toBe(true);
+    }
+  });
+
+  it('focus range [09:00:30, 09:01:30] dims out-of-range rows to 0.4', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('timeline-row').length).toBeGreaterThan(0);
+    });
+    await act(async () => {
+      useSelectionStore.setState({
+        focusRange: {
+          startTs: '2026-04-18T09:00:30Z',
+          endTs: '2026-04-18T09:01:30Z',
+        },
+      });
+    });
+
+    const rows = screen.getAllByTestId('timeline-row');
+    const byId = new Map<string, HTMLElement>();
+    for (const r of rows) {
+      const id = r.getAttribute('data-span-id');
+      if (id) byId.set(id, r);
+    }
+
+    // span-u-1 at 09:00:05Z → before start → dimmed.
+    const u1 = byId.get('span-u-1')!;
+    expect(u1.parentElement!.style.opacity).toBe('0.4');
+
+    // span-u-2 at 09:02:00Z → after end → dimmed.
+    const u2 = byId.get('span-u-2')!;
+    expect(u2.parentElement!.style.opacity).toBe('0.4');
+
+    // span-t-1 at 09:01:00Z → in-range → full opacity.
+    const t1 = byId.get('span-t-1')!;
+    const t1op = t1.parentElement!.style.opacity;
+    expect(t1op === '' || t1op === '1').toBe(true);
+  });
+
+  it('clearFocus restores all rows to full opacity', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('timeline-row').length).toBeGreaterThan(0);
+    });
+    await act(async () => {
+      useSelectionStore.setState({
+        focusRange: {
+          startTs: '2026-04-18T09:00:30Z',
+          endTs: '2026-04-18T09:01:30Z',
+        },
+      });
+    });
+    // Confirm some row is dimmed first.
+    const dimmedBefore = screen
+      .getAllByTestId('timeline-row')
+      .some((r) => r.parentElement!.style.opacity === '0.4');
+    expect(dimmedBefore).toBe(true);
+
+    await act(async () => {
+      useSelectionStore.getState().clearFocus();
+    });
+
+    const rows = screen.getAllByTestId('timeline-row');
+    for (const row of rows) {
+      const op = row.parentElement!.style.opacity;
+      expect(op === '' || op === '1').toBe(true);
+    }
+  });
+});
+
 describe('Cmd+Shift+R hotkey', () => {
   it('toggles recording when Cmd+Shift+R is pressed', async () => {
     let postCount = 0;

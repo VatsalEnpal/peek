@@ -7,7 +7,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { useMemo } from 'react';
 
 import { useSessionStore, buildTimelineRows, type LedgerEvent } from '../stores/session';
-import { useSelectionStore } from '../stores/selection';
+import { useSelectionStore, inFocusRange } from '../stores/selection';
 import { TimelineRow } from './TimelineRow';
 
 export function Timeline(): ReactElement {
@@ -21,6 +21,7 @@ export function Timeline(): ReactElement {
 
   const selectedSpanId = useSelectionStore((s) => s.selectedSpanId);
   const selectSpan = useSelectionStore((s) => s.selectSpan);
+  const focusRange = useSelectionStore((s) => s.focusRange);
 
   const rows = useMemo(
     () => buildTimelineRows(events, active, expanded),
@@ -84,7 +85,7 @@ export function Timeline(): ReactElement {
           expanded={expanded.has(r.id)}
           selected={selectedSpanId === r.id}
           tokens={tokensBySpan.get(r.id) ?? null}
-          inRange={true}
+          inRange={inFocusRange(r.startTs, focusRange)}
           onSelect={(): void => selectSpan(r.id)}
           onToggleExpand={(): void => toggleExpand(r.id)}
         />
