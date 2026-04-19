@@ -75,7 +75,14 @@ type FileState = {
   lastSpanCounts: Map<string, number>;
 };
 
-const DEBOUNCE_MS = 100;
+// L17: 100ms was too aggressive — an actively-writing JSONL (large CC
+// session with heavy tool use) triggers chokidar 'change' multiple times
+// per second. Each fires a full file re-import on the drain queue, which
+// is O(file size) and gets slower as the session grows. Result: daemon
+// pegged at 100% CPU, healthz times out. 2000ms debounce collapses bursts
+// so the daemon only re-imports after a session pauses. Trade-off: live UI
+// lags by up to 2s behind the transcript, but daemon stays responsive.
+const DEBOUNCE_MS = 2000;
 
 /**
  * Look up the set of known session ids + per-session span counts from the
