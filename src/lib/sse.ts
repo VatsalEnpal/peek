@@ -23,6 +23,8 @@ const EVENT_NAMES = [
   'span:new',
   'marker:opened',
   'marker:closed',
+  'recording:started',
+  'recording:ended',
 ] as const;
 
 const BACKOFF_SCHEDULE_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const;
@@ -94,8 +96,7 @@ export function subscribe(onEvent: SseListener): () => void {
     if (cancelled) return;
     if (reconnectTimer !== null) return; // already pending
     const delay =
-      BACKOFF_SCHEDULE_MS[Math.min(backoffIndex, BACKOFF_SCHEDULE_MS.length - 1)] ??
-      30_000;
+      BACKOFF_SCHEDULE_MS[Math.min(backoffIndex, BACKOFF_SCHEDULE_MS.length - 1)] ?? 30_000;
     backoffIndex = Math.min(backoffIndex + 1, BACKOFF_SCHEDULE_MS.length - 1);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
