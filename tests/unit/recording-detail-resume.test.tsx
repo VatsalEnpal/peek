@@ -383,3 +383,63 @@ describe('RecordingDetailPage — #14 subagent grouping', () => {
     expect(ids).toContain('tool-row-post-user');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #16 (reopened) — clicking anywhere on a tool row expands its details pane
+//
+// Pre-launch user-test: the visible chevron ▸ at the far-right of each row is
+// a tiny, hard-to-hit target. A natural "click anywhere on the row to see
+// more" interaction was missing — users clicking the command-text area saw
+// nothing happen. The row body must ALSO toggle the tool-row-body panel so
+// the hit area is generous and obvious.
+// ---------------------------------------------------------------------------
+
+describe('RecordingDetailPage — #16 row body is a click target, not just the chevron', () => {
+  const EVENTS: Ev[] = [
+    {
+      kind: 'span',
+      id: 'span-bash-click',
+      sessionId: 'sess-R',
+      type: 'tool_call',
+      name: 'Bash',
+      startTs: '2026-04-19T18:25:10.000Z',
+      tokensConsumed: 45,
+      inputs: { command: 'ls /tmp', description: 'list /tmp' },
+      outputs: 'file-a\nfile-b\n',
+    },
+  ];
+
+  beforeEach(() => {
+    mockFetch(EVENTS);
+  });
+
+  it('clicking the row body (not the chevron) opens the inputs/outputs pane', async () => {
+    await renderPage();
+    // Body must NOT be in the DOM before the click.
+    expect(screen.queryByTestId('tool-row-body-span-bash-click')).toBeNull();
+    // Simulate a real user click on the row container — not the toggle button.
+    const row = screen.getByTestId('tool-row-span-bash-click');
+    act(() => {
+      fireEvent.click(row);
+    });
+    // Body with inputs + outputs must now be visible.
+    const body = await waitFor(() => screen.getByTestId('tool-row-body-span-bash-click'));
+    expect(body.textContent).toContain('ls /tmp');
+    expect(body.textContent).toContain('file-a');
+  });
+
+  it('a second click on the row body collapses the pane', async () => {
+    await renderPage();
+    const row = screen.getByTestId('tool-row-span-bash-click');
+    act(() => {
+      fireEvent.click(row);
+    });
+    await waitFor(() => screen.getByTestId('tool-row-body-span-bash-click'));
+    act(() => {
+      fireEvent.click(row);
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('tool-row-body-span-bash-click')).toBeNull()
+    );
+  });
+});

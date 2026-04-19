@@ -686,8 +686,27 @@ function ToolRow({
   const label = span ? describeTarget(span) : (event.source ?? 'ledger');
   const kind = span ? span.type : 'ledger';
 
+  // v0.3-launch fix: the whole row is the click target for expand/collapse.
+  // Pre-fix, only the 10×10 chevron was clickable — users naturally clicked
+  // the command text or token area and nothing happened. The inner button
+  // remains a labelled, keyboard-accessible control (aria-label), but its
+  // onClick stopPropagates so a click on the button doesn't double-toggle
+  // via the outer row handler.
   return (
-    <div data-testid={`tool-row-${event.id}`} style={{ marginBottom: 0 }}>
+    <div
+      data-testid={`tool-row-${event.id}`}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      onClick={(): void => setExpanded((v) => !v)}
+      onKeyDown={(e): void => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          setExpanded((v) => !v);
+        }
+      }}
+      style={{ marginBottom: 0, cursor: 'pointer' }}
+    >
       <div style={rowStyle}>
         <span />
         <span style={{ color: 'var(--peek-fg-faint)', fontSize: 10 }}>
@@ -715,7 +734,12 @@ function ToolRow({
         <button
           type="button"
           data-testid={`tool-row-toggle-${event.id}`}
-          onClick={(): void => setExpanded((v) => !v)}
+          onClick={(e): void => {
+            // Don't let the button click bubble to the row — the outer
+            // handler already toggles, so a bubbled click would reverse it.
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
           aria-label={expanded ? 'collapse details' : 'expand details'}
           style={{
             background: 'transparent',
