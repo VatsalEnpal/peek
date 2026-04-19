@@ -290,15 +290,82 @@ export function SessionsPage(): ReactElement {
             <div
               data-testid="sessions-empty"
               style={{
-                padding: '48px 24px',
+                padding: '64px 24px',
                 color: 'var(--peek-fg-faint)',
                 fontSize: 'var(--peek-fs-sm)',
                 textAlign: 'center',
+                letterSpacing: '0.02em',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 10,
               }}
             >
-              {sessionsLoading
-                ? 'loading sessions…'
-                : 'no sessions yet — click import to scan ~/.claude/projects'}
+              {sessionsLoading ? (
+                <span>loading sessions…</span>
+              ) : (
+                <>
+                  <div style={{ color: 'var(--peek-fg-dim)', fontSize: 'var(--peek-fs-md)' }}>
+                    No sessions yet.
+                  </div>
+                  <div style={{ maxWidth: 560, lineHeight: 1.55 }}>
+                    Run{' '}
+                    <code
+                      className="peek-mono"
+                      style={{
+                        background: 'var(--peek-surface-2)',
+                        border: '1px solid var(--peek-border)',
+                        padding: '1px 6px',
+                        color: 'var(--peek-fg)',
+                        fontSize: 'var(--peek-fs-xs)',
+                      }}
+                    >
+                      peek watch
+                    </code>{' '}
+                    to capture live, or{' '}
+                    <code
+                      className="peek-mono"
+                      style={{
+                        background: 'var(--peek-surface-2)',
+                        border: '1px solid var(--peek-border)',
+                        padding: '1px 6px',
+                        color: 'var(--peek-fg)',
+                        fontSize: 'var(--peek-fs-xs)',
+                      }}
+                    >
+                      peek import &lt;path&gt;
+                    </code>{' '}
+                    for existing sessions.
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {sessionsError === null && sessions.length > 0 && (
+            <div
+              data-testid="sessions-watch-hint"
+              className="peek-mono"
+              style={{
+                padding: '10px 24px 2px',
+                color: 'var(--peek-fg-faint)',
+                fontSize: 10,
+                letterSpacing: '0.08em',
+                textTransform: 'lowercase',
+              }}
+            >
+              watching{' '}
+              <code
+                style={{
+                  color: 'var(--peek-fg-dim)',
+                  background: 'transparent',
+                  fontSize: 10,
+                  letterSpacing: '0.04em',
+                }}
+              >
+                ~/.claude/projects/
+              </code>{' '}
+              — new sessions appear here live
             </div>
           )}
 
