@@ -60,16 +60,6 @@ Open Claude Code. Type `/peek_start my-topic`. Work. Type `/peek_end`. Refresh `
 
 > **Heads up — known v0.3 limitation.** The recording picks the "current" Claude Code session by watching which JSONL was most recently appended. If you have multiple CC windows writing at the same time, a recording may briefly attribute to whichever one happened to blink last. For single-session workflows (almost everyone) this is invisible. If you're dogfooding Peek while debugging Peek in a second window — close one or wait for v0.3.1, which makes the JSONL-side marker authoritative.
 
-### Using Peek with agents other than Claude Code
-
-The live watcher in v0.3 is Claude-Code-first — it indexes `~/.claude/projects/<slug>/<session>.jsonl` as its source of truth. Users of Cursor, OpenAI Codex, Cline, or any other agent that emits a JSONL-ish transcript can still use Peek in **import mode** today:
-
-```bash
-node dist/bin/peek.js import /path/to/your-agent-transcript.jsonl
-```
-
-That populates the legacy `/sessions` view. Live-watch support for other agent runtimes is tracked for v0.4+.
-
 ---
 
 ## The mental model
@@ -81,18 +71,6 @@ Three rules keep it sane:
 - **One recording at a time per session.** A second `/peek_start` auto-saves the previous one and starts fresh — like hitting record on a camcorder while already recording.
 - **10-minute idle auto-close.** If you quit Claude Code or the session goes quiet, Peek closes the recording at the last event it saw.
 - **Recording follows the session it was started in.** Other Claude Code sessions in other terminals are invisible unless you `/peek_start` inside them too.
-
-## Text-marker fallback
-
-Haven't installed the slash commands? Type markers inside your prompt:
-
-```
-@peek-start my-topic
-…work normally…
-@peek-end
-```
-
-The markers must be the *entire* prompt on their own. Inline usage (`"document the @peek-start flow"`) is deliberately ignored so your README diffs and your chat about Peek don't accidentally start recordings.
 
 ## What a recording does NOT include
 
