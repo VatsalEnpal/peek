@@ -18,7 +18,8 @@
  */
 
 import http from 'node:http';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 
@@ -72,10 +73,23 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
   app.use('/api/bookmarks', bookmarksRouter);
   app.use('/api/unmask', unmaskRouter);
 
-  // Production static serving for the Vite bundle.
-  if (process.env.NODE_ENV === 'production') {
-    const distDir = join(__dirname, '..', 'dist');
+  // Static serving for the Vite bundle. Always mount if a build exists on
+  // disk — the CLI never sets NODE_ENV=production, and the old gate meant
+  // `peek serve` shipped a dead UI. Two candidate layouts: dev/CI runs
+  // against source so `__dirname` is `<repo>/server` and the build lands
+  // at `<repo>/dist/web`; the compiled CLI runs from `<repo>/dist/bin` via
+  // the server compiled to `<repo>/dist/server`, so we also check the
+  // sibling `web/` layout. Mounted AFTER all /api routes so API 404s are
+  // never swallowed. The SPA fallback regex excludes `/api/*` so deep
+  // links like `/session/abc-123` resolve to `index.html`.
+  const distCandidates = [resolve(__dirname, '..', 'dist', 'web'), resolve(__dirname, '..', 'web')];
+  const distDir = distCandidates.find((p) => existsSync(join(p, 'index.html')));
+
+  if (distDir) {
     app.use(express.static(distDir));
+    app.get(/^\/(?!api\/).*/, (_req, res) => {
+      res.sendFile(join(distDir, 'index.html'));
+    });
   }
 
   let server: http.Server | null = null;
