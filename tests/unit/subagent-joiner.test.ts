@@ -1,8 +1,26 @@
+/**
+ * Unit tests for the L1.2 subagent joiner.
+ *
+ * The v0.2 joiner extracts `agentId` from a `queued_command` attachment's
+ * `<task-id>` tag (NOT from any tool_result footer), matches the attachment to
+ * the originating `Agent` `tool_use` via `<tool-use-id>`, loads the child
+ * transcript at
+ *   <claudeProjectsDir>/<parentSessionId>/subagents/agent-<agentId>.jsonl
+ * (and its sibling `.meta.json`), runs the assembler on those child events,
+ * and splices the resulting spans into the parent Session while populating
+ * `parentSpan.childSpanIds`.
+ */
+
 import { describe, test, expect, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { extractSubagentFooter, joinSubagent } from '../../server/pipeline/subagent-joiner';
+import {
+  extractAgentIdFromQueuedCommand,
+  findQueuedCommandForToolUse,
+  joinSubagentsIntoSession,
+} from '../../server/pipeline/subagent-joiner';
+import { assembleSession, type Session, type ActionSpan } from '../../server/pipeline/model';
 
 const createdDirs: string[] = [];
 
@@ -19,110 +37,369 @@ afterEach(() => {
   }
 });
 
-describe('extractSubagentFooter', () => {
-  test('returns null when no footer is present', () => {
-    const content = '{"type":"user","text":"hello"}\n{"type":"assistant","text":"hi"}\n';
-    expect(extractSubagentFooter(content)).toBeNull();
+// ---------------------------------------------------------------------------
+// 1. Regex extraction
+// ---------------------------------------------------------------------------
+
+describe('extractAgentIdFromQueuedCommand', () => {
+  test('extracts hex agentId from a realistic queued_command prompt', () => {
+    const prompt = [
+      '<task-notification>',
+      '<task-id>a7f26c525a2784757</task-id>',
+      '<tool-use-id>toolu_013QxyYMn1DE7UbRG6CwhNzr</tool-use-id>',
+      '<output-file>/private/tmp/claude-502/foo/bar/tasks/a7f26c525a2784757.output</output-file>',
+      '<status>completed</status>',
+      '</task-notification>',
+    ].join('\n');
+
+    expect(extractAgentIdFromQueuedCommand(prompt)).toBe('a7f26c525a2784757');
   });
 
-  test('returns null when footer is malformed (non-numeric total_tokens)', () => {
-    const content = 'agentId: abc123\n<usage>\n  total_tokens: not-a-number\n</usage>\n';
-    expect(extractSubagentFooter(content)).toBeNull();
+  test('returns null when no <task-id> tag is present', () => {
+    expect(extractAgentIdFromQueuedCommand('<foo>bar</foo>')).toBeNull();
   });
 
-  test('parses optional toolUses and durationMs when present', () => {
-    const content =
-      'prefix junk\nagentId: deadbeef\n<usage>\n  total_tokens: 4321\n  tool_uses: 7\n  duration_ms: 9000\n</usage>\nmore junk\n';
-    const footer = extractSubagentFooter(content);
-    expect(footer).not.toBeNull();
-    expect(footer!.agentId).toBe('deadbeef');
-    expect(footer!.totalTokens).toBe(4321);
-    expect(footer!.toolUses).toBe(7);
-    expect(footer!.durationMs).toBe(9000);
+  test('ignores non-hex characters — the regex accepts only [a-f0-9]', () => {
+    // Uppercase / non-hex should not match (spec pins `/<task-id>([a-f0-9]+)<\/task-id>/`).
+    expect(extractAgentIdFromQueuedCommand('<task-id>XYZ</task-id>')).toBeNull();
   });
 });
 
-describe('joinSubagent', () => {
-  test('footer present + sidecar present → returns ok status with events', () => {
-    const dir = freshDir();
-    const agentId = 'a1b2c3';
-    const parentContent =
-      'something else\nagentId: a1b2c3\n<usage>\n  total_tokens: 1234\n</usage>\n';
-    const sidecarContent =
-      '{"type":"user","text":"inside sub"}\n{"type":"assistant","text":"reply"}\n';
-    writeFileSync(join(dir, `${agentId}.jsonl`), sidecarContent);
+// ---------------------------------------------------------------------------
+// 2. Tool-use-id matching
+// ---------------------------------------------------------------------------
 
-    const res = joinSubagent({
-      parentSession: { content: parentContent },
-      agentId,
-      sessionDir: dir,
-    });
+describe('findQueuedCommandForToolUse', () => {
+  test('picks the queued_command whose <tool-use-id> matches the given id', () => {
+    const events = [
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'toolu_AAA', name: 'Agent', input: { subagent_type: 'x' } },
+          ],
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'queued_command',
+          prompt:
+            '<task-notification>\n<task-id>aaa111</task-id>\n<tool-use-id>toolu_AAA</tool-use-id>\n</task-notification>',
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'toolu_BBB', name: 'Agent', input: { subagent_type: 'y' } },
+          ],
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'queued_command',
+          prompt:
+            '<task-notification>\n<task-id>bbb222</task-id>\n<tool-use-id>toolu_BBB</tool-use-id>\n</task-notification>',
+        },
+      },
+    ];
 
-    expect(res.agentId).toBe(agentId);
-    expect(res.footer.totalTokens).toBe(1234);
-    expect(res.sidecarStatus).toBe('ok');
-    expect(res.sidecarPath).toBe(join(dir, `${agentId}.jsonl`));
-    expect(res.sidecarEvents.length).toBe(2);
-    expect(res.sidecarEvents[0].type).toBe('user');
-    expect(res.sidecarEvents[1].type).toBe('assistant');
+    const first = findQueuedCommandForToolUse(events, 'toolu_AAA');
+    expect(first).not.toBeNull();
+    expect(first!.agentId).toBe('aaa111');
+
+    const second = findQueuedCommandForToolUse(events, 'toolu_BBB');
+    expect(second).not.toBeNull();
+    expect(second!.agentId).toBe('bbb222');
   });
 
-  test('footer present + sidecar missing → status missing with empty events', () => {
-    const dir = freshDir();
-    const agentId = 'abcdef';
-    const parentContent = 'agentId: abcdef\n<usage>\n  total_tokens: 42\n</usage>\n';
-
-    const res = joinSubagent({
-      parentSession: { content: parentContent },
-      agentId,
-      sessionDir: dir,
-    });
-
-    expect(res.agentId).toBe(agentId);
-    expect(res.footer.totalTokens).toBe(42);
-    expect(res.sidecarStatus).toBe('missing');
-    expect(res.sidecarPath).toBeNull();
-    expect(res.sidecarEvents).toEqual([]);
+  test('returns null when no matching queued_command exists', () => {
+    const events = [
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_ZZZ', name: 'Agent', input: {} }],
+        },
+      },
+    ];
+    expect(findQueuedCommandForToolUse(events, 'toolu_ZZZ')).toBeNull();
   });
 
-  test('footer present + sidecar truncated → status truncated with partial events', () => {
-    const dir = freshDir();
-    const agentId = 'bad1ce';
-    const parentContent = 'agentId: bad1ce\n<usage>\n  total_tokens: 99\n</usage>\n';
-    // Last non-empty line is malformed JSON (truncated).
-    const sidecarContent =
-      '{"type":"user","text":"ok"}\n{"type":"assistant","text":"also ok"}\n{"type":"assistant","tex';
-    writeFileSync(join(dir, `${agentId}.jsonl`), sidecarContent);
+  test('skips queued_commands whose task-id is not valid hex', () => {
+    const events = [
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'queued_command',
+          prompt: '<task-id>XYZ</task-id><tool-use-id>toolu_QQQ</tool-use-id>',
+        },
+      },
+    ];
+    expect(findQueuedCommandForToolUse(events, 'toolu_QQQ')).toBeNull();
+  });
+});
 
-    const res = joinSubagent({
-      parentSession: { content: parentContent },
-      agentId,
-      sessionDir: dir,
+// ---------------------------------------------------------------------------
+// 3. Missing child JSONL → empty childSpanIds, no throw
+// ---------------------------------------------------------------------------
+
+describe('joinSubagentsIntoSession — missing sidecar', () => {
+  test('emits warning-safe result: subagent span retains empty childSpanIds when JSONL missing', () => {
+    const claudeProjectsDir = freshDir();
+    const parentSessionId = 'parent-abc';
+    // Parent session directory exists but subagents/agent-<id>.jsonl does NOT.
+    mkdirSync(join(claudeProjectsDir, parentSessionId, 'subagents'), { recursive: true });
+
+    const subagentSpan: ActionSpan = {
+      id: 'span-sub-1',
+      type: 'subagent',
+      name: 'Agent: research',
+      childSpanIds: [],
+      tokensConsumed: 0,
+      metadata: { toolUseId: 'toolu_XYZ' },
+    };
+    const session: Session = {
+      id: parentSessionId,
+      turns: [],
+      spans: [subagentSpan],
+      ledger: [],
+    };
+
+    const events = [
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_XYZ',
+              name: 'Agent',
+              input: { subagent_type: 'research' },
+            },
+          ],
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'queued_command',
+          prompt: '<task-id>deadbeef</task-id><tool-use-id>toolu_XYZ</tool-use-id>',
+        },
+      },
+    ];
+
+    const warnings: string[] = [];
+    const result = joinSubagentsIntoSession({
+      session,
+      events,
+      claudeProjectsDir,
+      assemble: (childEvents) =>
+        assembleSession(childEvents, { sourceFile: 'child.jsonl', tokenOf: () => 0 }),
+      onWarn: (msg) => warnings.push(msg),
     });
 
-    expect(res.sidecarStatus).toBe('truncated');
-    expect(res.sidecarEvents.length).toBe(2);
-    expect(res.sidecarEvents[0].text).toBe('ok');
-    expect(res.sidecarEvents[1].text).toBe('also ok');
+    // No throw, child ids stay empty.
+    expect(result.session.spans.find((s) => s.id === 'span-sub-1')!.childSpanIds).toEqual([]);
+    expect(warnings.some((w) => /deadbeef/.test(w))).toBe(true);
+    expect(result.joinedAgentIds).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. End-to-end: parent with Agent tool_use + queued_command + real child JSONL
+// ---------------------------------------------------------------------------
+
+describe('joinSubagentsIntoSession — end-to-end', () => {
+  test('parent subagent span gets childSpanIds populated from the child JSONL', () => {
+    const claudeProjectsDir = freshDir();
+    const parentSessionId = 'parent-sid';
+    const agentId = 'abc123def456';
+
+    const childDir = join(claudeProjectsDir, parentSessionId, 'subagents');
+    mkdirSync(childDir, { recursive: true });
+
+    // Child JSONL: one user prompt + one assistant text block.
+    const childJsonl =
+      JSON.stringify({
+        type: 'user',
+        uuid: 'child-user-1',
+        timestamp: '2026-04-19T00:00:00.000Z',
+        sessionId: `sub-${agentId}`,
+        message: { role: 'user', content: 'please summarize' },
+      }) +
+      '\n' +
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'child-asst-1',
+        parentUuid: 'child-user-1',
+        timestamp: '2026-04-19T00:00:01.000Z',
+        message: {
+          id: 'msg_child_1',
+          content: [{ type: 'text', text: 'Summary: hello world.' }],
+          usage: { input_tokens: 5, output_tokens: 4 },
+        },
+      }) +
+      '\n';
+
+    writeFileSync(join(childDir, `agent-${agentId}.jsonl`), childJsonl);
+    writeFileSync(
+      join(childDir, `agent-${agentId}.meta.json`),
+      JSON.stringify({ agentType: 'researcher', description: 'do a thing' })
+    );
+
+    // Parent session with one subagent span.
+    const subagentSpan: ActionSpan = {
+      id: 'parent-span-1',
+      type: 'subagent',
+      name: 'Agent: researcher',
+      childSpanIds: [],
+      tokensConsumed: 0,
+      metadata: { toolUseId: 'toolu_PARENT_1' },
+    };
+    const session: Session = {
+      id: parentSessionId,
+      turns: [],
+      spans: [subagentSpan],
+      ledger: [],
+    };
+
+    const parentEvents = [
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_PARENT_1',
+              name: 'Agent',
+              input: { subagent_type: 'researcher', description: 'do a thing' },
+            },
+          ],
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'queued_command',
+          prompt: `<task-id>${agentId}</task-id><tool-use-id>toolu_PARENT_1</tool-use-id>`,
+        },
+      },
+    ];
+
+    const result = joinSubagentsIntoSession({
+      session,
+      events: parentEvents,
+      claudeProjectsDir,
+      assemble: (childEvents) =>
+        assembleSession(childEvents, {
+          sourceFile: join(childDir, `agent-${agentId}.jsonl`),
+          tokenOf: (s) => s.length,
+        }),
+    });
+
+    const parentSub = result.session.spans.find((s) => s.id === 'parent-span-1')!;
+    expect(parentSub.childSpanIds.length).toBeGreaterThan(0);
+
+    // Every childSpanId must resolve to an actual span inserted into the session.
+    const spanById = new Map(result.session.spans.map((s) => [s.id, s]));
+    for (const childId of parentSub.childSpanIds) {
+      expect(spanById.has(childId)).toBe(true);
+    }
+
+    // metadata from .meta.json should be surfaced on the parent span.
+    expect(parentSub.metadata).toMatchObject({
+      agentType: 'researcher',
+      agentId,
+    });
+
+    // joinedAgentIds should reflect what we stitched.
+    expect(result.joinedAgentIds).toContain(agentId);
   });
 
-  test('footer with optional metadata and sidecar present', () => {
-    const dir = freshDir();
-    const agentId = 'feedface';
-    const parentContent =
-      'agentId: feedface\n<usage>\n  total_tokens: 500\n  tool_uses: 3\n  duration_ms: 1500\n</usage>\n';
-    writeFileSync(join(dir, `${agentId}.jsonl`), '{"type":"user","text":"q"}\n');
+  test('depth=1 only — grandchild Agent tool_use inside child JSONL does NOT recurse', () => {
+    const claudeProjectsDir = freshDir();
+    const parentSessionId = 'parent-sid-2';
+    const agentId = 'cafebabe';
 
-    const res = joinSubagent({
-      parentSession: { content: parentContent },
-      agentId,
-      sessionDir: dir,
+    const childDir = join(claudeProjectsDir, parentSessionId, 'subagents');
+    mkdirSync(childDir, { recursive: true });
+
+    // Child JSONL contains its OWN Agent tool_use — joiner must NOT recurse.
+    const childJsonl =
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'gc-1',
+        message: {
+          id: 'msg_gc_1',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_GRANDCHILD',
+              name: 'Agent',
+              input: { subagent_type: 'nested' },
+            },
+          ],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      }) + '\n';
+    writeFileSync(join(childDir, `agent-${agentId}.jsonl`), childJsonl);
+
+    const subagentSpan: ActionSpan = {
+      id: 'parent-span-2',
+      type: 'subagent',
+      name: 'Agent: outer',
+      childSpanIds: [],
+      tokensConsumed: 0,
+      metadata: { toolUseId: 'toolu_OUTER' },
+    };
+    const session: Session = {
+      id: parentSessionId,
+      turns: [],
+      spans: [subagentSpan],
+      ledger: [],
+    };
+
+    const parentEvents = [
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_OUTER',
+              name: 'Agent',
+              input: { subagent_type: 'outer' },
+            },
+          ],
+        },
+      },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'queued_command',
+          prompt: `<task-id>${agentId}</task-id><tool-use-id>toolu_OUTER</tool-use-id>`,
+        },
+      },
+    ];
+
+    const result = joinSubagentsIntoSession({
+      session,
+      events: parentEvents,
+      claudeProjectsDir,
+      assemble: (childEvents) =>
+        assembleSession(childEvents, {
+          sourceFile: 'child.jsonl',
+          tokenOf: () => 0,
+        }),
     });
 
-    expect(res.footer.toolUses).toBe(3);
-    expect(res.footer.durationMs).toBe(1500);
-    expect(res.footer.totalTokens).toBe(500);
-    expect(res.sidecarStatus).toBe('ok');
-    expect(res.sidecarEvents).toHaveLength(1);
+    // The grandchild Agent span exists but its childSpanIds must be empty.
+    const childSpans = result.session.spans.filter((s) => s.type === 'subagent');
+    // Two subagent spans now: the top-level outer, and the grandchild emitted as a regular span.
+    const grandchild = childSpans.find((s) => s.metadata?.['toolUseId'] === 'toolu_GRANDCHILD');
+    expect(grandchild).toBeDefined();
+    expect(grandchild!.childSpanIds).toEqual([]);
   });
 });
