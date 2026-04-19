@@ -1,7 +1,20 @@
 import type { ReactElement } from 'react';
 /**
- * Horizontal token-saturation bar. Sticky at the top of the inspector.
- * Green ≤ 60 %, yellow 60–85 %, red > 85 %.
+ * Context saturation bar. Renders horizontally across the full width with a
+ * CONTEXT label on the left and `N / MAX` tabular-num on the right.
+ *
+ * Color scheme (per plan L3.6 + mockup L2):
+ *   0 – 60 %   → green   (peek-ok)    — plenty of head-room
+ *   60 – 90 %  → amber   (peek-accent) — caution zone
+ *   90+ %      → red     (peek-bad)   — nearing ceiling
+ *
+ * If `tokens > max` the fill clamps to 100 % (can't overflow its bar
+ * visually) and the color is forced red so the user sees they're over.
+ *
+ * Dual role:
+ *   - Top of SessionDetailPage (full-width bar).
+ *   - Top of the Inspector drawer (same component, narrower column).
+ * Both modes read the same tokens; styling is position-agnostic.
  */
 
 import { formatTokens } from '../lib/format';
@@ -9,65 +22,95 @@ import { formatTokens } from '../lib/format';
 type Props = {
   tokens: number;
   max?: number;
+  /**
+   * Override the root `data-testid`. Used by SessionDetailPage to emit
+   * `session-context-gauge` so the drawer-scoped `context-gauge` hook stays
+   * unambiguous.
+   */
+  testId?: string;
 };
 
-export function ContextGauge({ tokens, max = 200_000 }: Props): ReactElement {
-  const ratio = Math.max(0, Math.min(1, tokens / max));
-  const pct = ratio * 100;
-  const color =
-    ratio <= 0.6 ? 'var(--peek-ok)' : ratio <= 0.85 ? 'var(--peek-warn)' : 'var(--peek-bad)';
+/** Pick a color band given the saturation ratio. */
+export function gaugeColor(ratio: number): string {
+  if (ratio >= 0.9) return 'var(--peek-bad)';
+  if (ratio >= 0.6) return 'var(--peek-accent)';
+  return 'var(--peek-ok)';
+}
+
+export function ContextGauge({
+  tokens,
+  max = 200_000,
+  testId = 'context-gauge',
+}: Props): ReactElement {
+  const rawRatio = max > 0 ? tokens / max : 0;
+  const clamped = Math.max(0, Math.min(1, rawRatio));
+  const pct = clamped * 100;
+  const over = tokens > max;
+  const color = over ? 'var(--peek-bad)' : gaugeColor(clamped);
 
   return (
     <div
-      data-testid="context-gauge"
+      data-testid={testId}
+      data-saturation={clamped.toFixed(2)}
+      data-over={over ? 'true' : 'false'}
+      role="group"
+      aria-label={`context usage: ${formatTokens(tokens)} of ${formatTokens(max)}`}
       style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 1,
-        padding: '12px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        padding: '10px 24px',
         background: 'var(--peek-surface)',
         borderBottom: '1px solid var(--peek-border)',
+        fontSize: 'var(--peek-fs-xs)',
+        color: 'var(--peek-fg-faint)',
+        letterSpacing: '0.04em',
       }}
     >
-      <div
+      <span
         className="peek-mono"
         style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 'var(--peek-fs-xs)',
-          letterSpacing: '0.08em',
           textTransform: 'uppercase',
-          color: 'var(--peek-fg-dim)',
-          marginBottom: 6,
+          letterSpacing: '0.16em',
+          flexShrink: 0,
         }}
       >
-        <span>context</span>
-        <span className="peek-num" style={{ color: 'var(--peek-fg)' }}>
-          {formatTokens(tokens)} / {formatTokens(max)}
-        </span>
-      </div>
+        context
+      </span>
       <div
         role="progressbar"
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={100}
         style={{
-          height: 6,
-          background: 'var(--peek-bg)',
-          border: '1px solid var(--peek-border)',
+          flex: 1,
+          height: 4,
+          background: 'var(--peek-border)',
+          position: 'relative',
           overflow: 'hidden',
         }}
       >
         <div
           data-testid="context-gauge-fill"
           style={{
-            width: `${pct}%`,
-            height: '100%',
+            position: 'absolute',
+            inset: 0,
+            right: `${100 - pct}%`,
             background: color,
-            transition: 'width 180ms ease-out, background 180ms ease-out',
+            transition: 'right 180ms ease-out, background 180ms ease-out',
           }}
         />
       </div>
+      <span
+        className="peek-num"
+        data-testid="context-gauge-num"
+        style={{ color: 'var(--peek-fg)', fontWeight: 500 }}
+      >
+        {formatTokens(tokens)}
+      </span>
+      <span className="peek-num" style={{ color: 'var(--peek-fg-dim)' }}>
+        / {formatTokens(max)}
+      </span>
     </div>
   );
 }
