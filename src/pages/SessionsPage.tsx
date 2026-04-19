@@ -23,7 +23,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ImportDialog } from '../components/ImportDialog';
+import { HelpPanel } from '../components/HelpPanel';
 import { useSessionStore, type SessionSummary } from '../stores/session';
+import { useSelectionStore } from '../stores/selection';
 import { useBookmarksStore } from '../stores/bookmarks';
 import { truncate } from '../lib/format';
 import type { BookmarkDto } from '../lib/api';
@@ -106,6 +108,7 @@ export function SessionsPage(): ReactElement {
   const [search, setSearch] = useState<string>('');
   const [importOpen, setImportOpen] = useState<boolean>(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleHelp = useSelectionStore((s) => s.toggleHelp);
 
   useEffect(() => {
     void fetchSessions();
@@ -237,17 +240,23 @@ export function SessionsPage(): ReactElement {
             >
               import
             </button>
-            <span
-              aria-hidden="true"
+            <button
+              type="button"
+              data-testid="help-btn"
+              onClick={toggleHelp}
+              aria-label="show help"
+              className="peek-mono"
               style={{
                 fontSize: 10,
                 color: 'var(--peek-fg-faint)',
                 border: '1px solid var(--peek-border)',
+                background: 'transparent',
                 padding: '1px 5px',
+                cursor: 'pointer',
               }}
             >
               ?
-            </span>
+            </button>
           </header>
 
           {/* ── meta line ── */}
@@ -444,6 +453,7 @@ export function SessionsPage(): ReactElement {
       </div>
 
       <ImportDialog open={importOpen} onClose={(): void => setImportOpen(false)} />
+      <HelpPanel />
     </div>
   );
 }

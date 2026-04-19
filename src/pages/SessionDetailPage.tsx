@@ -34,7 +34,7 @@ import { RecordButton } from '../components/RecordButton';
 import { ContextGauge } from '../components/ContextGauge';
 import { computeContextGaugeStats } from '../lib/contextGauge';
 import { FocusBar } from '../components/FocusBar';
-import { KbHelp } from '../components/KbHelp';
+import { HelpPanel } from '../components/HelpPanel';
 import { ImportDialog } from '../components/ImportDialog';
 import { useSessionStore, buildTimelineRows } from '../stores/session';
 import { useSelectionStore } from '../stores/selection';
@@ -395,7 +395,7 @@ export function SessionDetailPage(): ReactElement {
         <Inspector />
       </main>
 
-      <KbHelp />
+      <HelpPanel />
       <ImportDialog open={importOpen} onClose={(): void => setImportOpen(false)} />
     </div>
   );
