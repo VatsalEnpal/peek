@@ -32,6 +32,15 @@ import {
   defaultSkillsSourceDir,
   defaultClaudeConfigDir,
 } from '../server/cli/install';
+import { installFatalHandlers } from '../server/cli/fatal-handlers';
+
+// Install process-level fatal error handlers BEFORE any other work. If any
+// async chain reaches the top of the event loop with an unhandled error, the
+// process dies with exit code 1 instead of becoming a half-dead zombie
+// (HTTP listener closed, chokidar still holding fd handles keeping the
+// loop alive). See server/cli/fatal-handlers.ts for the full failure-mode
+// writeup.
+installFatalHandlers();
 
 function defaultDataDir(): string {
   return path.join(os.homedir(), '.peek');

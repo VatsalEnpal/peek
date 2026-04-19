@@ -335,6 +335,20 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
     scheduleImport(absPath);
   });
 
+  // v0.3 launch-fix: explicitly handle chokidar 'error' events. Without this
+  // subscriber, chokidar errors (EMFILE fd exhaustion on large
+  // `~/.claude/projects/`, permission denied on specific subdirs, rename
+  // races) propagate as EventEmitter errors which Node turns into
+  // uncaughtException. That's caught by installFatalHandlers (process exits
+  // cleanly), but most chokidar errors are recoverable — we'd rather log
+  // them and keep the HTTP server alive than kill the daemon for a transient
+  // FS hiccup. The fatal handler remains the backstop.
+  watcher.on('error', (err) => {
+    const msg = err instanceof Error ? (err.message ?? String(err)) : String(err);
+    // eslint-disable-next-line no-console
+    console.warn(`[peek watch] chokidar error: ${msg}`);
+  });
+
   // Wait until the initial scan completes so callers can rely on `ready`
   // semantics — useful in tests where files are written BEFORE startWatch()
   // returns (the `ignoreInitial: false` pass will pick them up pre-ready).
