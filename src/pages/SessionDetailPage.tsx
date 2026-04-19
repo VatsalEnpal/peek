@@ -140,8 +140,21 @@ export function SessionDetailPage(): ReactElement {
           break;
         }
         case 'close': {
-          if (useSelectionStore.getState().helpOpen) setHelp(false);
-          else closeDrawer();
+          if (useSelectionStore.getState().helpOpen) {
+            setHelp(false);
+          } else {
+            // L4.1 — Esc reverts URL from /session/:id/span/:spanId →
+            // /session/:id. The URL→store effect above will then fire
+            // `closeDrawer()` so the two remain in lockstep; calling
+            // `closeDrawer()` here too would double-close and race the
+            // transition animation.
+            const sessId = useSessionStore.getState().selectedSessionId;
+            if (useSelectionStore.getState().drawerOpen && sessId) {
+              navigate(`/session/${encodeURIComponent(sessId)}`, { replace: false });
+            } else {
+              closeDrawer();
+            }
+          }
           break;
         }
         case 'toggle-help':
@@ -165,7 +178,7 @@ export function SessionDetailPage(): ReactElement {
       }
     };
     return bindKeyboard(handler);
-  }, [selectSpan, expandSpan, collapseSpan, closeDrawer, toggleHelp, setHelp]);
+  }, [selectSpan, expandSpan, collapseSpan, closeDrawer, toggleHelp, setHelp, navigate]);
 
   // Currently-viewed session summary (for title/metadata).
   const summary = useMemo(() => sessions.find((s) => s.id === id) ?? null, [sessions, id]);
