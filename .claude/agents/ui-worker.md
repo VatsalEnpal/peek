@@ -38,5 +38,6 @@ You are a WORK subagent for UI tasks in `peek-trace`. Your PRIMARY skill is `fro
 ## Output
 
 Same structured summary format as pipeline-worker, plus:
+
 - `Playwright tests: <list>` — which interactions tested.
 - `Screenshots (if any): <paths>`.

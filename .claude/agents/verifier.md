@@ -38,8 +38,11 @@ You are a VERIFY subagent. Your job is to confirm the WORK subagent's claim of s
   "verdict": "pass",
   "failedAssertions": [],
   "acceptanceTestsStatus": {
-    "A1": "pass", "A2": "not_yet_testable", "A3": "not_yet_testable",
-    "A4": "not_yet_testable", "A5": "not_yet_testable"
+    "A1": "pass",
+    "A2": "not_yet_testable",
+    "A3": "not_yet_testable",
+    "A4": "not_yet_testable",
+    "A5": "not_yet_testable"
   },
   "regressionDetected": false,
   "retryCount": 0,

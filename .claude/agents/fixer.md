@@ -33,6 +33,7 @@ Load `superpowers:systematic-debugging` as your PRIMARY skill. Root-cause before
 ## Output
 
 Same structured summary as work subagent, plus:
+
 - `Root cause: <one sentence>`
 - `Failed assertions resolved: <list of ids>`
 - `Regressions introduced: <list or "none">`
