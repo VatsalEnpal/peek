@@ -14,7 +14,7 @@
 
 import { create } from 'zustand';
 
-import { apiGet } from '../lib/api';
+import { apiGet, type BookmarkDto } from '../lib/api';
 import type { SpanType } from '../lib/icons';
 import { CHIP_DEFS } from '../lib/icons';
 
@@ -31,6 +31,12 @@ export type SessionSummary = {
   timeAgo: string;
   startTs: string | null;
   endTs: string | null;
+  /**
+   * L14: bookmarks for this session, surfaced on the sessions list so the
+   * card can render `/peek_start` markers inline as chips. Absent on legacy
+   * responses (client code treats undefined as "no bookmarks").
+   */
+  bookmarks?: BookmarkDto[];
 };
 
 export type SpanEvent = {

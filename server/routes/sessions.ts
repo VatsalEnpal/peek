@@ -39,6 +39,9 @@ router.get('/', (req: Request, res: Response) => {
   const summaries = rows.map((s) => {
     const events = store.listEvents(s.id);
     const turns = store.listTurns(s.id);
+    // L14: surface bookmarks on the sessions list so the UI can render
+    // `/peek_start` markers as chips on the card without a second round-trip.
+    const bookmarks = store.listBookmarks(s.id);
     const turnIds = new Set<string>();
     for (const e of events) {
       if (e.kind === 'span' && (e as SpanRow & { kind: 'span' }).turnId) {
@@ -91,6 +94,7 @@ router.get('/', (req: Request, res: Response) => {
       timeAgo: timeAgo(s.startTs ?? s.endTs),
       startTs: s.startTs ?? null,
       endTs: s.endTs ?? null,
+      bookmarks,
     };
   });
 

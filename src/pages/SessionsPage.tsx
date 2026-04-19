@@ -491,6 +491,13 @@ function SessionRow({
 }): ReactElement {
   const ratio = Math.min(1, Math.max(0, s.totalTokens / CONTEXT_CEILING));
   const barPct = `${Math.round(ratio * 100)}%`;
+  // L14: bookmarks surfaced inline on the card. Cap the visible chips so a
+  // wildly-marked session doesn't blow out the layout; the chevron still
+  // exposes the full list.
+  const MAX_VISIBLE_CHIPS = 3;
+  const cardBookmarks = s.bookmarks ?? [];
+  const visibleChips = cardBookmarks.slice(0, MAX_VISIBLE_CHIPS);
+  const hiddenChipCount = Math.max(0, cardBookmarks.length - MAX_VISIBLE_CHIPS);
 
   return (
     <>
@@ -684,6 +691,70 @@ function SessionRow({
           </div>
         </Link>
       </div>
+
+      {cardBookmarks.length > 0 && (
+        <div
+          data-testid={`session-bookmark-chips-${s.id}`}
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            padding: '0 24px 10px 26px',
+            fontFamily: 'var(--peek-font-mono)',
+          }}
+        >
+          {visibleChips.map((b) => (
+            <Link
+              key={b.id}
+              to={`/session/${encodeURIComponent(s.id)}`}
+              data-testid={`session-bookmark-chip-${b.id}`}
+              title={b.label ?? '(unnamed bookmark)'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '1px 7px',
+                border: '1px solid var(--peek-border)',
+                color: 'var(--peek-fg-dim)',
+                fontSize: 10,
+                letterSpacing: '0.04em',
+                textDecoration: 'none',
+                background: 'transparent',
+                maxWidth: 180,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={(e): void => {
+                e.currentTarget.style.borderColor = 'var(--peek-accent)';
+                e.currentTarget.style.color = 'var(--peek-fg)';
+              }}
+              onMouseLeave={(e): void => {
+                e.currentTarget.style.borderColor = 'var(--peek-border)';
+                e.currentTarget.style.color = 'var(--peek-fg-dim)';
+              }}
+            >
+              <span aria-hidden="true" style={{ color: 'var(--peek-accent)' }}>
+                ▸
+              </span>
+              {b.label ?? '(unnamed)'}
+            </Link>
+          ))}
+          {hiddenChipCount > 0 && (
+            <span
+              data-testid={`session-bookmark-chips-overflow-${s.id}`}
+              style={{
+                padding: '1px 7px',
+                color: 'var(--peek-fg-faint)',
+                fontSize: 10,
+                letterSpacing: '0.04em',
+              }}
+            >
+              +{hiddenChipCount} more
+            </span>
+          )}
+        </div>
+      )}
 
       {expanded && <BookmarkList sessionId={s.id} />}
     </>
