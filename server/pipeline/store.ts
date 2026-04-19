@@ -360,6 +360,7 @@ export class Store {
     listBookmarksBySession: Statement;
     listSpansBySession: Statement;
     listLedgerBySession: Statement;
+    listTurnsBySession: Statement;
   };
 
   constructor(dbPath: string) {
@@ -480,7 +481,42 @@ export class Store {
       listLedgerBySession: this.db.prepare(
         `SELECT * FROM ledger_entries WHERE session_id = ? ORDER BY COALESCE(ts, '') ASC, id ASC`
       ),
+      listTurnsBySession: this.db.prepare(
+        `SELECT * FROM turns WHERE session_id = ? ORDER BY turn_index ASC, id ASC`
+      ),
     };
+  }
+
+  /**
+   * L2.4 CRITICAL — fetch every Turn row for a session, hydrated with its
+   * `usage` JSON. The CONTEXT gauge route emits these as `turn` wire events
+   * so the UI can compute real per-turn context pressure (not span content
+   * sums, which under-report by ~40x on real Claude Code sessions).
+   */
+  listTurns(sessionId: string): TurnRow[] {
+    type TurnDbRow = {
+      id: string;
+      session_id: string;
+      turn_index: number;
+      start_ts: string | null;
+      end_ts: string | null;
+      usage_json: string | null;
+    };
+    const rows = this.stmts.listTurnsBySession.all(sessionId) as TurnDbRow[];
+    return rows.map((r) => {
+      const out: TurnRow = {
+        id: r.id,
+        sessionId: r.session_id,
+        turnIndex: r.turn_index,
+      };
+      const startTs = undef(r.start_ts);
+      if (startTs !== undefined) out.startTs = startTs;
+      const endTs = undef(r.end_ts);
+      if (endTs !== undefined) out.endTs = endTs;
+      const usage = decodeJson<TurnRow['usage']>(r.usage_json);
+      if (usage !== undefined) out.usage = usage;
+      return out;
+    });
   }
 
   close(): void {

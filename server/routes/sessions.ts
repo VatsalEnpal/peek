@@ -17,7 +17,7 @@
 import { Router, type Request, type Response } from 'express';
 
 import { composeLabel } from '../identity/session-label';
-import type { Store, SpanRow, LedgerEntryRow } from '../pipeline/store';
+import type { Store, SpanRow, LedgerEntryRow, TurnRow } from '../pipeline/store';
 
 const router = Router();
 
@@ -94,7 +94,35 @@ router.get('/:id/events', (req: Request, res: Response) => {
   }
 
   const events = store.listEvents(id, opts);
-  res.json(events);
+
+  // L2.4 CRITICAL — prepend `turn` wire events so the UI CONTEXT gauge can
+  // read real per-turn model usage (system prompt + cached context + history
+  // + assistant reply) instead of span content sums. Span sums under-report
+  // real context-window pressure by ~40x on Claude Code sessions because
+  // spans only carry per-tool content tokens. See `self-check.ts` line 110
+  // for the same computation server-side (reconciler.parentReported).
+  const turnEvents = store.listTurns(id).map((t) => {
+    const evt: {
+      kind: 'turn';
+      id: string;
+      sessionId: string;
+      index: number;
+      startTs?: string;
+      endTs?: string;
+      usage?: TurnRow['usage'];
+    } = {
+      kind: 'turn',
+      id: t.id,
+      sessionId: t.sessionId,
+      index: t.turnIndex,
+    };
+    if (t.startTs !== undefined) evt.startTs = t.startTs;
+    if (t.endTs !== undefined) evt.endTs = t.endTs;
+    if (t.usage !== undefined) evt.usage = t.usage;
+    return evt;
+  });
+
+  res.json([...turnEvents, ...events]);
 });
 
 router.get('/:id/spans/:spanId', (req: Request, res: Response) => {

@@ -75,7 +75,34 @@ export type LedgerEvent = {
   };
 };
 
-export type StoreEvent = SpanEvent | LedgerEvent;
+/**
+ * L2.4 CRITICAL — per-turn model usage, emitted on the events wire so the
+ * CONTEXT gauge can reflect real context-window pressure (the same number
+ * Claude Code's /usage command shows).
+ *
+ * Spans only capture per-tool content tokens (the string "ls -la" ≈ 5 tokens).
+ * The actual per-turn cost — system prompt + cached context + history +
+ * assistant reply — lives on `Turn.usage` in the JSONL and is surfaced here
+ * so the client-side gauge doesn't under-report by ~40x.
+ */
+export type TurnEvent = {
+  kind: 'turn';
+  id: string;
+  sessionId: string;
+  index: number;
+  startTs?: string;
+  endTs?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    thinkingTokens?: number;
+    iterationCount?: number;
+  };
+};
+
+export type StoreEvent = SpanEvent | LedgerEvent | TurnEvent;
 
 export type ChipKey = (typeof CHIP_DEFS)[number]['key'];
 
