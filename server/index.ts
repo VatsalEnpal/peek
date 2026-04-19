@@ -104,8 +104,19 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
     app,
     async listen() {
       const port = opts.port ?? 7334;
-      server = await new Promise<http.Server>((resolve) => {
+      server = await new Promise<http.Server>((resolve, reject) => {
         const s = app.listen(port, () => resolve(s));
+        s.once('error', (err: NodeJS.ErrnoException) => {
+          if (err.code === 'EADDRINUSE') {
+            reject(
+              new Error(
+                `peek: port ${port} is already in use. Another peek (or different app) is running on that port. Stop it with \`lsof -ti :${port} | xargs kill\`, or run with a different port: PEEK_PORT=7336 peek`,
+              ),
+            );
+          } else {
+            reject(err);
+          }
+        });
       });
       return server;
     },
