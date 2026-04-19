@@ -14,7 +14,9 @@ describe('A2: per-block tokens sum to Anthropic reported turn usage within 2%', 
   });
 
   test('sum of ledger entry tokens per turn matches message.usage within 2%', async () => {
-    const session = await importFixture('./tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl');
+    const session = await importFixture(
+      './tests/fixtures/isolated-claude-projects/biz-ops-real.jsonl'
+    );
     expect(session, 'fixture must import').toBeDefined();
     expect(session.turns, 'session must have turns').toBeDefined();
     expect(session.turns.length, 'turns must be non-empty').toBeGreaterThan(0);
@@ -25,18 +27,20 @@ describe('A2: per-block tokens sum to Anthropic reported turn usage within 2%', 
       .filter((t: any) => {
         const u = t?.usage;
         if (!u) return false;
-        const total = (u.inputTokens ?? 0) + (u.cacheCreationTokens ?? 0) + (u.cacheReadTokens ?? 0);
+        const total =
+          (u.inputTokens ?? 0) + (u.cacheCreationTokens ?? 0) + (u.cacheReadTokens ?? 0);
         return total > 100;
       })
       .slice(0, 10);
 
-    expect(meaningfulTurns.length, 'at least 5 meaningful turns needed for sampling').toBeGreaterThanOrEqual(5);
+    expect(
+      meaningfulTurns.length,
+      'at least 5 meaningful turns needed for sampling'
+    ).toBeGreaterThanOrEqual(5);
 
     for (const turn of meaningfulTurns) {
       const reported =
-        turn.usage.inputTokens +
-        turn.usage.cacheCreationTokens +
-        turn.usage.cacheReadTokens;
+        turn.usage.inputTokens + turn.usage.cacheCreationTokens + turn.usage.cacheReadTokens;
       const ourSum = session.ledger
         .filter((l: any) => l.turnId === turn.id)
         .reduce((s: number, l: any) => s + (l.tokens ?? 0), 0);

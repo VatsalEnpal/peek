@@ -18,7 +18,9 @@ describe('A1: retroactive import does not modify source', () => {
     await importFromDirectory(FIXTURE_DIR);
     const sourceHashAfter = sha256OfDirectory(FIXTURE_DIR);
 
-    expect(sourceHashAfter, 'source directory MUST be byte-identical after import').toEqual(sourceHashBefore);
+    expect(sourceHashAfter, 'source directory MUST be byte-identical after import').toEqual(
+      sourceHashBefore
+    );
 
     const imported = await countImportedSessions();
     expect(imported, 'at least one session must have been imported').toBeGreaterThan(0);

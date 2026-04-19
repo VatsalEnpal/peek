@@ -36,7 +36,10 @@ export async function importFromDirectory(path: string): Promise<void> {
 
 export async function importFixture(path: string): Promise<any> {
   const { importPath } = await import('../../server/pipeline/import');
-  return await importPath(path, { dataDir: process.env.PEEK_TEST_DATA_DIR ?? '/tmp/peek-test-data', returnAssembled: true });
+  return await importPath(path, {
+    dataDir: process.env.PEEK_TEST_DATA_DIR ?? '/tmp/peek-test-data',
+    returnAssembled: true,
+  });
 }
 
 export async function countImportedSessions(): Promise<number> {
@@ -78,15 +81,24 @@ export async function dockerBuild(dockerfile: string): Promise<void> {
   execSync(`docker build -t peek-verify -f ${dockerfile} .`, { stdio: 'inherit' });
 }
 
-export async function dockerRun(opts: { cmd: string[]; volumes?: Record<string, string> }): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+export async function dockerRun(opts: {
+  cmd: string[];
+  volumes?: Record<string, string>;
+}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const { execSync } = await import('node:child_process');
   const volumeArgs = Object.entries(opts.volumes ?? {})
     .map(([host, container]) => `-v "${process.cwd()}/${host}:${container}"`)
     .join(' ');
   try {
-    const stdout = execSync(`docker run --rm ${volumeArgs} peek-verify ${opts.cmd.join(' ')}`, { encoding: 'utf8' });
+    const stdout = execSync(`docker run --rm ${volumeArgs} peek-verify ${opts.cmd.join(' ')}`, {
+      encoding: 'utf8',
+    });
     return { exitCode: 0, stdout, stderr: '' };
   } catch (e: any) {
-    return { exitCode: e.status ?? 1, stdout: e.stdout?.toString() ?? '', stderr: e.stderr?.toString() ?? '' };
+    return {
+      exitCode: e.status ?? 1,
+      stdout: e.stdout?.toString() ?? '',
+      stderr: e.stderr?.toString() ?? '',
+    };
   }
 }

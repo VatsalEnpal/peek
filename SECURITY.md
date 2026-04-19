@@ -9,6 +9,7 @@ Report vulnerabilities via **GitHub's private security advisory flow** at https:
 ## Threat model — what Peek defends against
 
 Peek captures Claude Code session transcripts, which commonly contain:
+
 - API keys (Anthropic, OpenAI, AWS, etc.)
 - Database credentials
 - Personal information from tool outputs
@@ -27,14 +28,14 @@ Peek captures Claude Code session transcripts, which commonly contain:
 
 ## Residual risks openly documented
 
-| Attack | Works in v0.1? | Mitigation |
-|---|---|---|
-| Homoglyph evasion of regex (U+2010 vs U+002D) | Yes | v0.2 adds NFKD normalization |
-| Secrets in PNG/PDF tool outputs | Yes | v0.3 optional OCR pass |
-| Secret split across two content blocks | Yes | v0.2 sliding-window join |
-| `sourceOffset` as secret-locator (if store.db leaked) | Partial | FS perms are the boundary; v0.2 encrypts salts at rest |
-| Browser extension reads unmasked DOM | Yes | Cannot mitigate; warn in docs |
-| Deterministic-hash recovery with leaked DB + screenshot | Yes (requires local compromise) | v0.2 encrypts salts |
+| Attack                                                  | Works in v0.1?                  | Mitigation                                             |
+| ------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
+| Homoglyph evasion of regex (U+2010 vs U+002D)           | Yes                             | v0.2 adds NFKD normalization                           |
+| Secrets in PNG/PDF tool outputs                         | Yes                             | v0.3 optional OCR pass                                 |
+| Secret split across two content blocks                  | Yes                             | v0.2 sliding-window join                               |
+| `sourceOffset` as secret-locator (if store.db leaked)   | Partial                         | FS perms are the boundary; v0.2 encrypts salts at rest |
+| Browser extension reads unmasked DOM                    | Yes                             | Cannot mitigate; warn in docs                          |
+| Deterministic-hash recovery with leaked DB + screenshot | Yes (requires local compromise) | v0.2 encrypts salts                                    |
 
 See the full design spec and residual-attack table for details.
 
