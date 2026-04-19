@@ -203,6 +203,53 @@ describe('startWatch (L1.1)', () => {
     expect(buf).toMatch(/"sessionId":"watch-session-1"/);
   });
 
+  test('L5-followup: claudeDir that does NOT exist yet is created and watched', async () => {
+    // Repro: first-time user runs `peek install` then `peek` before any
+    // Claude Code session has ever run. On their machine,
+    // `~/.claude/projects/` may not exist — the watcher must create it
+    // AND notice files that land there afterward, not silently watch
+    // nothing.
+    const nonexistent = join(ctx.claudeDir, 'brand-new-dir-that-did-not-exist');
+
+    const watcher = await startWatch({
+      dataDir: ctx.dataDir,
+      claudeDir: nonexistent,
+    });
+    stopWatch = async () => watcher.stop();
+
+    // Wait a tick for the watcher to settle.
+    await new Promise((r) => setTimeout(r, 150));
+
+    const projectDir = join(nonexistent, 'proj-ne');
+    mkdirSync(projectDir, { recursive: true });
+    const jsonl = join(projectDir, 'ne.jsonl');
+    writeFileSync(
+      jsonl,
+      userEvent({
+        uuid: 'u-ne',
+        sessionId: 'watch-session-ne',
+        ts: '2026-04-19T19:00:00Z',
+        text: 'hi from a fresh dir',
+      })
+    );
+
+    await waitFor(
+      () => {
+        const s = new Store(ctx.dataDir);
+        try {
+          const sessions = (s as any).db
+            .prepare('SELECT id FROM sessions WHERE id = ?')
+            .all('watch-session-ne') as { id: string }[];
+          return sessions.length > 0 ? true : undefined;
+        } finally {
+          s.close();
+        }
+      },
+      3000,
+      50
+    );
+  });
+
   test('L5-followup: claudeDir whose ancestor path contains a dot-segment (e.g. ~/.claude) is NOT ignored', async () => {
     // Repro of the silent no-op daemon bug: when the user runs plain `peek`,
     // the default watched directory is `~/.claude/projects`. If the ignored

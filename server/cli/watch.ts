@@ -30,7 +30,7 @@
  */
 
 import { watch, type FSWatcher } from 'chokidar';
-import { statSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 
 import { importPath } from '../pipeline/import';
 import { Store } from '../pipeline/store';
@@ -105,13 +105,19 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
   // `.jsonl` in the event handler is the documented work-around and matches
   // the behaviour we verified empirically against chokidar 5.0.0 on macOS.
   //
-  // `ignored`: skip dot-prefixed path segments relative to the watched root
-  // only. Matching the root itself (e.g. `~/.claude/projects`) against a
-  // naïve `/(^|\/)\.[^/]/` regex would reject everything — the leading
-  // `.claude` component in the ancestor path would trip the pattern for
-  // every descendant path. We strip the `claudeDir` prefix first, then
-  // check whether any SEGMENT of the relative remainder starts with `.`.
-  // Fixes a silent no-op daemon on default `~/.claude/projects` setups.
+  // Ensure the watched root exists. Fresh `peek install` + `peek` flows on
+  // a new machine will hit `peek` before any Claude Code session has ever
+  // run, so `~/.claude/projects` may not exist yet. chokidar silently
+  // watches nothing in that case; we create the dir up-front so the
+  // first JSONL that lands there fires `add`. (v0.2.1 L5-followup.)
+  try {
+    mkdirSync(claudeDir, { recursive: true });
+  } catch {
+    // If we can't create it (permission denied on a read-only FS, say),
+    // fall through — chokidar will silently watch nothing, which is the
+    // least-bad outcome. The daemon still serves HTTP successfully.
+  }
+
   // `ignored`: skip dot-prefixed path segments relative to the watched root
   // only. Matching the root itself (e.g. `~/.claude/projects`) against a
   // naïve `/(^|\/)\.[^/]/` regex would reject everything — the leading
