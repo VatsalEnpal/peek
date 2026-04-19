@@ -1,10 +1,25 @@
 import type { ReactElement, ReactNode } from 'react';
 /**
  * Flat-DOM scrollable timeline. Consumes `buildTimelineRows` from the store
- * and wires selection + expand-cascade into the two zustand stores.
+ * and wires selection + cascade-collapse into the two zustand stores.
+ *
+ * Click behaviour (L3.2):
+ *   - Clicking a row calls `useSelectionStore.selectSpan(id)` which opens the
+ *     Inspector drawer, AND also navigates to `/session/:id/span/:spanId` so
+ *     the URL deep-links to the drawer state.
+ *
+ * Cascade (L3.4 — Option B layer on top of Option A flatten):
+ *   - Children of a collapsed ancestor are hidden via `hiddenByCollapse`.
+ *   - Default state = expanded (no entries in expandedSpans + a sentinel:
+ *     "collapsed" is opt-in). A span is considered collapsed iff its id is in
+ *     the `collapsedSpans` Set (we use the inverse of `expandedSpans` below
+ *     for v0.2 to avoid an extra store field). That keeps the regression-test
+ *     "tool_calls must be visible" finding green while giving users a way to
+ *     silence noise.
  */
 
 import { useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { useSessionStore, buildTimelineRows, type LedgerEvent } from '../stores/session';
 import { useSelectionStore, inFocusRange } from '../stores/selection';
@@ -16,12 +31,16 @@ export function Timeline(): ReactElement {
   const error = useSessionStore((s) => s.eventsError);
   const active = useSessionStore((s) => s.activeChips);
   const expanded = useSessionStore((s) => s.expandedSpans);
-  const toggleExpand = useSessionStore((s) => s.toggleSpanExpanded);
+  const collapsed = useSessionStore((s) => s.collapsedSpans);
+  const toggleCollapse = useSessionStore((s) => s.toggleSpanCollapsed);
   const selectedSessionId = useSessionStore((s) => s.selectedSessionId);
 
   const selectedSpanId = useSelectionStore((s) => s.selectedSpanId);
   const selectSpan = useSelectionStore((s) => s.selectSpan);
   const focusRange = useSelectionStore((s) => s.focusRange);
+
+  const navigate = useNavigate();
+  const params = useParams<{ id: string }>();
 
   const rows = useMemo(
     () => buildTimelineRows(events, active, expanded),
@@ -41,12 +60,8 @@ export function Timeline(): ReactElement {
 
   /**
    * Prefer the ledger-aggregated token count; fall back to the span's own
-   * `tokensConsumed` (or `tokens`) field when present. Tool-call spans carry
-   * this directly and have no ledger rows, so without the fallback every row
-   * reads `—`.
-   *
-   * A resolved value of `0` is a valid number and renders as "0" (not "—").
-   * Only `null`/`undefined` renders as "—".
+   * `tokensConsumed` (or `tokens`) field when present.
+   * A resolved value of `0` renders as "0" (not "—"); only null/undefined is "—".
    */
   const tokensFor = (r: {
     id: string;
@@ -60,12 +75,39 @@ export function Timeline(): ReactElement {
     return null;
   };
 
+  /**
+   * Map of span-id → "is hidden because some ancestor is collapsed".
+   *
+   * We walk the dedup'd span set so orphans (parentSpanId points outside the
+   * payload) are treated as roots and never hidden. A cycle guard (visited
+   * set) keeps malformed data from looping forever.
+   */
+  const hiddenByCollapse = useMemo(() => {
+    if (collapsed.size === 0) return new Set<string>();
+    const parent = new Map<string, string | undefined>();
+    for (const r of rows) parent.set(r.id, r.parentSpanId);
+    const hidden = new Set<string>();
+    for (const r of rows) {
+      let cur: string | undefined = r.parentSpanId;
+      const seen = new Set<string>();
+      while (cur && !seen.has(cur)) {
+        seen.add(cur);
+        if (collapsed.has(cur)) {
+          hidden.add(r.id);
+          break;
+        }
+        cur = parent.get(cur);
+      }
+    }
+    return hidden;
+  }, [rows, collapsed]);
+
   if (!selectedSessionId) {
     return (
       <Empty>
         <div>no session selected</div>
         <div className="peek-dim" style={{ fontSize: 'var(--peek-fs-sm)', marginTop: 8 }}>
-          pick one from the dropdown above
+          pick one from the landing page
         </div>
       </Empty>
     );
@@ -87,6 +129,17 @@ export function Timeline(): ReactElement {
     return <Empty>no events match the active filters</Empty>;
   }
 
+  const handleSelect = (id: string): void => {
+    selectSpan(id);
+    // URL sync — deep-link to the drawer so refresh preserves state.
+    const sessId = params.id ?? selectedSessionId;
+    if (sessId) {
+      navigate(`/session/${encodeURIComponent(sessId)}/span/${encodeURIComponent(id)}`, {
+        replace: false,
+      });
+    }
+  };
+
   return (
     <div
       data-testid="timeline"
@@ -103,12 +156,13 @@ export function Timeline(): ReactElement {
           span={r}
           depth={r.depth}
           hasChildren={r.hasChildren}
-          expanded={expanded.has(r.id)}
+          expanded={!collapsed.has(r.id)}
           selected={selectedSpanId === r.id}
           tokens={tokensFor(r)}
           inRange={inFocusRange(r.startTs, focusRange)}
-          onSelect={(): void => selectSpan(r.id)}
-          onToggleExpand={(): void => toggleExpand(r.id)}
+          hiddenByCollapse={hiddenByCollapse.has(r.id)}
+          onSelect={(): void => handleSelect(r.id)}
+          onToggleExpand={(): void => toggleCollapse(r.id)}
         />
       ))}
     </div>

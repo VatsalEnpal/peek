@@ -91,6 +91,13 @@ export type SessionState = {
 
   activeChips: Set<ChipKey>;
   expandedSpans: Set<string>;
+  /**
+   * Spans whose descendants are currently hidden in the timeline (L3.4).
+   * Default state is empty → all group rows render expanded. Independent from
+   * `expandedSpans`, which is the legacy v0.1 cascade state (kept for
+   * back-compat with keyboard h/l bindings).
+   */
+  collapsedSpans: Set<string>;
 
   fetchSessions: () => Promise<void>;
   selectSession: (id: string | null) => Promise<void>;
@@ -99,6 +106,7 @@ export type SessionState = {
   toggleSpanExpanded: (spanId: string) => void;
   expandSpan: (spanId: string) => void;
   collapseSpan: (spanId: string) => void;
+  toggleSpanCollapsed: (spanId: string) => void;
 };
 
 const allChips = new Set<ChipKey>(CHIP_DEFS.map((c) => c.key));
@@ -115,6 +123,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   activeChips: allChips,
   expandedSpans: new Set(),
+  collapsedSpans: new Set(),
 
   async fetchSessions() {
     set({ sessionsLoading: true, sessionsError: null });
@@ -180,6 +189,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const next = new Set(cur);
     next.delete(spanId);
     set({ expandedSpans: next });
+  },
+  toggleSpanCollapsed(spanId) {
+    const cur = get().collapsedSpans;
+    const next = new Set(cur);
+    if (next.has(spanId)) next.delete(spanId);
+    else next.add(spanId);
+    set({ collapsedSpans: next });
   },
 }));
 

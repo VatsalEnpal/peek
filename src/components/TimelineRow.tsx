@@ -1,10 +1,19 @@
 import type { ReactElement } from 'react';
 /**
- * Single flat-DOM row in the timeline.
- * Layout: [ts] [icon] [name] [tokens mono right] [▶ if cascade]
+ * Single row of the L2 timeline.
+ *
+ * Fixed grid (mockup L2 — L3.2):
+ *   ┌──────────┬──────┬─────────┬─────────────┬─────────┬─────┐
+ *   │ time     │ icon │ TYPE    │ name        │ tokens  │ ▸   │
+ *   │ 96px     │ 20px │ 88px    │ 1fr         │ 96px    │16px │
+ *   │ mono     │ emo  │ upper   │ truncate    │ amber   │ arr │
+ *   └──────────┴──────┴─────────┴─────────────┴─────────┴─────┘
  *
  * Right-click opens a small context menu for focus range + save-as-bookmark.
  * Rows out of focus range render dimmed via `style.opacity`.
+ * Click row → parent handler navigates to `/session/:id/span/:spanId`.
+ * Cascade arrow (▸ / ▾) toggles an expansion Set on the session store (L3.4)
+ * without regressing the flatten; children render flat whether expanded or not.
  */
 
 import { useEffect, useRef } from 'react';
@@ -25,9 +34,44 @@ type Props = {
   selected: boolean;
   tokens: number | null;
   inRange: boolean;
+  /**
+   * Whether this row is rendered inside a collapsed ancestor group (L3.4).
+   * Hidden rows return a zero-height sentinel so keyboard indices still line
+   * up with what's visible — but they take no visual space.
+   */
+  hiddenByCollapse?: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
 };
+
+/** Types that carry a name from subagent / api_call → render in serif italic per mockup. */
+const SERIF_TYPES = new Set(['subagent', 'api_call', 'user_prompt']);
+
+/** Short, stable label per SpanType for the TYPE column. Falls back to the raw type. */
+function typeLabel(type: string): string {
+  switch (type) {
+    case 'user_prompt':
+      return 'prompt';
+    case 'api_call':
+      return 'api';
+    case 'thinking_block':
+      return 'think';
+    case 'tool_call':
+      return 'tool';
+    case 'subagent':
+      return 'agent';
+    case 'skill_activation':
+      return 'skill';
+    case 'mcp_call':
+      return 'mcp';
+    case 'memory_read':
+      return 'file';
+    case 'hook_fire':
+      return 'hook';
+    default:
+      return type.length > 10 ? type.slice(0, 10) : type;
+  }
+}
 
 export function TimelineRow({
   span,
@@ -37,12 +81,10 @@ export function TimelineRow({
   selected,
   tokens,
   inRange,
+  hiddenByCollapse,
   onSelect,
   onToggleExpand,
 }: Props): ReactElement {
-  // `expanded` is retained on the Props contract for the future Option B
-  // cascade UI; currently unused under Option A (children render flat).
-  void expanded;
   const name = span.name ?? span.type;
   const contextMenuRowId = useSelectionStore((s) => s.contextMenuRowId);
   const openContextMenu = useSelectionStore((s) => s.openContextMenu);
@@ -103,6 +145,25 @@ export function TimelineRow({
     }
   };
 
+  if (hiddenByCollapse === true) {
+    // Render a zero-height anchor so tests / keyboard nav that walks the DOM
+    // can still find the row, while the user sees nothing.
+    return (
+      <div
+        ref={rootRef}
+        data-testid="timeline-row"
+        data-span-id={span.id}
+        data-span-type={span.type}
+        data-hidden="true"
+        aria-hidden="true"
+        style={{ display: 'none' }}
+      />
+    );
+  }
+
+  const useSerif = SERIF_TYPES.has(span.type);
+  const indentCh = Math.min(depth, 4) * 3; // 3ch per indent level
+
   return (
     <div ref={rootRef} style={{ position: 'relative', opacity: inRange ? 1 : 0.4 }}>
       <button
@@ -115,22 +176,23 @@ export function TimelineRow({
         onContextMenu={onContextMenu}
         style={{
           display: 'grid',
-          gridTemplateColumns: '84px 20px 1fr auto 20px',
-          alignItems: 'center',
-          gap: 'var(--peek-sp-3)',
+          gridTemplateColumns: '96px 20px 88px 1fr 96px 16px',
+          alignItems: 'baseline',
+          columnGap: 12,
           width: '100%',
-          padding: '4px 12px',
-          paddingLeft: `calc(12px + ${depth * 2}ch)`,
+          padding: '6px 24px',
+          paddingLeft: `calc(24px + ${indentCh}ch)`,
           textAlign: 'left',
           borderLeft: `2px solid ${selected ? 'var(--peek-accent)' : 'transparent'}`,
-          background: selected ? 'var(--peek-surface-2)' : 'transparent',
+          background: selected ? 'rgba(255, 180, 84, 0.08)' : 'transparent',
           color: 'var(--peek-fg)',
           fontFamily: 'var(--peek-font-sans)',
           fontSize: 'var(--peek-fs-md)',
           lineHeight: '20px',
+          cursor: 'pointer',
         }}
         onMouseEnter={(e): void => {
-          if (!selected) e.currentTarget.style.background = 'var(--peek-surface)';
+          if (!selected) e.currentTarget.style.background = 'var(--peek-surface-2)';
         }}
         onMouseLeave={(e): void => {
           if (!selected) e.currentTarget.style.background = 'transparent';
@@ -138,53 +200,87 @@ export function TimelineRow({
       >
         <span
           className="peek-mono"
-          style={{ color: 'var(--peek-fg-faint)', fontSize: 'var(--peek-fs-xs)' }}
+          style={{
+            color: 'var(--peek-fg-faint)',
+            fontSize: 'var(--peek-fs-xs)',
+            fontVariantNumeric: 'tabular-nums',
+          }}
         >
           {formatClock(span.startTs)}
         </span>
-        <span aria-hidden="true" style={{ fontSize: 14, lineHeight: '20px' }}>
+        <span aria-hidden="true" style={{ fontSize: 13, textAlign: 'center' }}>
           {iconFor(span.type)}
         </span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span
+          className="peek-mono"
+          style={{
+            color: 'var(--peek-fg-dim)',
+            fontSize: 10,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+          }}
+        >
+          {typeLabel(span.type)}
+        </span>
+        <span
+          style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontFamily: useSerif ? '"Fraunces", Georgia, serif' : 'var(--peek-font-sans)',
+            fontStyle: useSerif ? 'italic' : 'normal',
+            fontSize: useSerif ? 14 : 'var(--peek-fs-md)',
+            color: 'var(--peek-fg)',
+            letterSpacing: useSerif ? '-0.005em' : 0,
+          }}
+        >
           {truncate(name, 120)}
         </span>
         <span
           className="peek-num"
           style={{
-            // Muted when missing; amber accent when numeric (labels muted,
-            // numbers prominent — see design principles).
-            color: tokens === null ? 'var(--peek-fg-faint)' : 'var(--peek-accent)',
+            color: tokens === null || tokens === 0 ? 'var(--peek-fg-faint)' : 'var(--peek-accent)',
             fontSize: 'var(--peek-fs-sm)',
             fontVariantNumeric: 'tabular-nums',
             textAlign: 'right',
-            minWidth: 64,
+            fontWeight: tokens !== null && tokens > 0 ? 500 : 400,
           }}
         >
           {tokens === null ? '—' : formatTokens(tokens)}
         </span>
         {hasChildren ? (
           <span
-            // v0.2 Option A: children already render flat-indented in the
-            // stream. The marker is a purely visual parent/group indicator;
-            // clicking is a no-op (the underlying row-click still selects).
-            // Keep data-testid + onClick wiring so future Option B can swap
-            // in a real expand toggle without churn.
-            aria-label="group"
+            // L3.4 — cascade arrow. Clicking toggles the expansion Set so the
+            // TYPE label/arrow flips between ▸ (collapsed) and ▾ (expanded).
+            // Children still render flat either way — collapsed simply hides
+            // them in the DOM via the `hiddenByCollapse` prop. Keyboard users
+            // can drive the same toggle via h / l in AppShell.
+            aria-label={expanded ? 'collapse group' : 'expand group'}
+            aria-expanded={expanded}
+            role="button"
+            tabIndex={0}
             data-testid="cascade-toggle"
             onClick={(e): void => {
               e.stopPropagation();
               onToggleExpand();
             }}
+            onKeyDown={(e): void => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onToggleExpand();
+              }
+            }}
             style={{
-              color: 'var(--peek-fg-faint)',
+              color: expanded ? 'var(--peek-accent)' : 'var(--peek-fg-faint)',
               fontSize: 'var(--peek-fs-xs)',
               display: 'inline-block',
               textAlign: 'center',
               width: 16,
-              cursor: 'default',
+              cursor: 'pointer',
             }}
           >
-            ▸
+            {expanded ? '▾' : '▸'}
           </span>
         ) : (
           <span />
@@ -197,7 +293,7 @@ export function TimelineRow({
           style={{
             position: 'absolute',
             top: '100%',
-            left: 'calc(12px + 84px)',
+            left: 'calc(12px + 96px)',
             margin: 0,
             padding: '4px 0',
             listStyle: 'none',
