@@ -1,23 +1,37 @@
 /**
- * Session assembler for peek-trace.
+ * Session assembler for peek-trace (v0.2 — block-level dispatch).
  *
- * Takes raw JSONL events (from `parseJsonl`) and constructs a structured
- * `Session` object composed of turns, action spans, and a ledger of content
- * entries. All emitted fields use camelCase — raw snake_case usage fields
- * from Claude Code JSONL are converted at this boundary.
+ * Takes raw JSONL events (from `parseJsonl`) and produces a structured
+ * `Session`. Walks `message.content[]` block-by-block per §DATA-MAPPING in
+ * the v0.2 builder plan — each content block becomes one ActionSpan whose
+ * type is derived from `block.type` (+ `block.name` for tool_use).
+ *
+ * All emitted fields use camelCase — raw snake_case usage fields from CC
+ * JSONL are converted at this boundary.
  */
 
 export type SpanType =
+  // Human prompt (turn-starting `user` event with text content).
   | 'user_prompt'
-  | 'thinking'
+  // Assistant text block (model reply).
   | 'api_call'
+  // Assistant thinking block (rendered ONLY when tokens > 500).
+  | 'thinking_block'
+  // Generic tool_use (Read, Write, Edit, Bash, Grep, Glob, WebFetch,
+  // WebSearch, TodoWrite, and any unclassified tool).
   | 'tool_call'
+  // tool_use with name === 'Agent' (also legacy 'Task' / 'TaskCreate').
   | 'subagent'
-  | 'hook'
-  | 'skill'
-  | 'memory'
-  | 'system'
-  | 'attachment'
+  // tool_use with name === 'Skill' OR attachment.type === 'skill_listing'.
+  | 'skill_activation'
+  // tool_use with name starting `mcp__`.
+  | 'mcp_call'
+  // Read tool whose file_path matches `*/memory/*`.
+  | 'memory_read'
+  // attachment hook_success / hook_additional_context OR system
+  // stop_hook_summary.
+  | 'hook_fire'
+  // Fallback — preserves raw event under metadata.rawEvent.
   | 'unknown';
 
 export type TurnUsage = {
@@ -99,12 +113,57 @@ export type AssembleContext = {
 };
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-const SUBAGENT_TOOL_NAMES = new Set(['Task', 'TaskCreate']);
+const GENERIC_TOOL_NAMES = new Set([
+  'Read',
+  'Write',
+  'Edit',
+  'Bash',
+  'Grep',
+  'Glob',
+  'WebFetch',
+  'WebSearch',
+  'TodoWrite',
+  'MultiEdit',
+  'BashOutput',
+  'KillShell',
+  'NotebookEdit',
+  'TaskUpdate',
+  'TaskList',
+]);
+
+// The plan renames the old 'Task' tool to 'Agent'. Keep legacy aliases
+// ('Task', 'TaskCreate') so older fixtures still classify as subagent.
+const SUBAGENT_TOOL_NAMES = new Set(['Agent', 'Task', 'TaskCreate']);
+
+const THINKING_TOKEN_THRESHOLD = 500;
 
 function stringifyContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (content == null) return '';
+  // Content blocks from tool_result can be an array of {type:'text',text:'…'}.
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (typeof block === 'string') {
+        parts.push(block);
+      } else if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (typeof b.text === 'string') parts.push(b.text);
+        else if (typeof b.content === 'string') parts.push(b.content);
+        else {
+          try {
+            parts.push(JSON.stringify(b));
+          } catch {
+            parts.push(String(b));
+          }
+        }
+      }
+    }
+    return parts.join('\n');
+  }
   try {
     return JSON.stringify(content);
   } catch {
@@ -112,13 +171,51 @@ function stringifyContent(content: unknown): string {
   }
 }
 
+function isMemoryPath(p: unknown): boolean {
+  if (typeof p !== 'string') return false;
+  return /\/memory\//i.test(p);
+}
+
+function basename(p: string): string {
+  const norm = p.replace(/\\/g, '/');
+  const idx = norm.lastIndexOf('/');
+  return idx < 0 ? norm : norm.slice(idx + 1);
+}
+
+/** Block → SpanType + default name. `name` may be refined by caller. */
+function classifyAssistantBlock(block: any): { type: SpanType; name?: string } {
+  const t = block?.type;
+  if (t === 'text') return { type: 'api_call' };
+  if (t === 'thinking') return { type: 'thinking_block', name: 'thinking' };
+  if (t === 'tool_use') {
+    const toolName: string = typeof block?.name === 'string' ? block.name : 'tool';
+    if (SUBAGENT_TOOL_NAMES.has(toolName)) {
+      const subType =
+        typeof block?.input?.subagent_type === 'string' ? block.input.subagent_type : 'unknown';
+      return { type: 'subagent', name: `Agent: ${subType}` };
+    }
+    if (toolName === 'Skill') {
+      const skill = typeof block?.input?.skill === 'string' ? block.input.skill : 'unknown';
+      return { type: 'skill_activation', name: skill };
+    }
+    if (toolName.startsWith('mcp__')) {
+      return { type: 'mcp_call', name: toolName };
+    }
+    if (toolName === 'Read' && isMemoryPath(block?.input?.file_path)) {
+      return { type: 'memory_read', name: basename(block.input.file_path as string) };
+    }
+    // Any other tool → generic tool_call.
+    return { type: 'tool_call', name: toolName };
+  }
+  return { type: 'unknown' };
+}
+
 function isUserPromptEvent(evt: any): boolean {
   if (evt?.type !== 'user') return false;
   const content = evt?.message?.content;
-  // String-shaped content = direct user prompt. Array-of-tool_result = tool response, not a turn.
   if (typeof content === 'string') return true;
   if (Array.isArray(content)) {
-    // If ALL blocks are tool_result, this is a tool response, not a user prompt.
+    // If ALL blocks are tool_result, this is a tool response, not a prompt.
     const hasNonToolResult = content.some(
       (b: any) => b && typeof b === 'object' && b.type !== 'tool_result'
     );
@@ -127,43 +224,36 @@ function isUserPromptEvent(evt: any): boolean {
   return false;
 }
 
-function blockSpanType(blockType: string, blockName?: string): SpanType {
-  switch (blockType) {
-    case 'text':
-      return 'api_call';
-    case 'thinking':
-      return 'thinking';
-    case 'tool_use':
-      if (blockName && SUBAGENT_TOOL_NAMES.has(blockName)) return 'subagent';
-      return 'tool_call';
-    case 'tool_result':
-      return 'tool_call';
-    default:
-      return 'unknown';
+function classifyAttachment(evt: any): { type: SpanType; name?: string } {
+  const atype = evt?.attachment?.type;
+  if (atype === 'hook_success' || atype === 'hook_additional_context') {
+    const hookName = evt.attachment?.hookName ?? 'hook';
+    const hookEvent = evt.attachment?.hookEvent ?? atype;
+    return { type: 'hook_fire', name: `${hookName}:${hookEvent}` };
   }
+  if (atype === 'skill_listing') {
+    const count = evt.attachment?.skillCount ?? 0;
+    return { type: 'skill_activation', name: `skill_listing (${count} skills)` };
+  }
+  return { type: 'unknown', name: typeof atype === 'string' ? atype : 'attachment' };
 }
 
-function eventSpanType(evtType: string): SpanType {
-  switch (evtType) {
-    case 'user':
-      return 'user_prompt';
-    case 'assistant':
-      return 'api_call';
-    case 'system':
-      return 'system';
-    case 'attachment':
-      return 'attachment';
-    default:
-      return 'unknown';
+function classifySystem(evt: any): { type: SpanType; name?: string } {
+  if (evt?.subtype === 'stop_hook_summary') {
+    return { type: 'hook_fire', name: 'stop_hook_summary' };
   }
+  return { type: 'unknown', name: typeof evt?.subtype === 'string' ? evt.subtype : 'system' };
 }
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 export function assembleSession(events: any[], ctx: AssembleContext): Session {
   const turns: Turn[] = [];
   const spans: ActionSpan[] = [];
   const ledger: LedgerEntry[] = [];
 
-  // Pick first event with useful session metadata.
   const metaEvt = events.find((e) => e && (e.sessionId || e.cwd || e.gitBranch));
   const sessionId: string = metaEvt?.sessionId ?? 'session-unknown';
 
@@ -182,105 +272,159 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
 
   let currentTurn: Turn | undefined;
   let turnIndex = 0;
-  // Track message.id -> turnId on which we've already credited usage, so we don't double-count.
+  // Track message.id -> usage already credited, so we never double-count when
+  // CC splits one assistant message across multiple events with shared usage.
   const countedMessageIds = new Set<string>();
   let ledgerCounter = 0;
+  let spanCounter = 0;
+
+  // Index tool_use_id → ActionSpan so we can later attach tool_result outputs.
+  const toolUseIdToSpan = new Map<string, ActionSpan>();
+
+  const tokenOf = ctx.tokenOf ?? (() => 0);
+
+  function addLedger(
+    turnId: string,
+    introducedBySpanId: string | undefined,
+    source: string,
+    contentStr: string,
+    ts: string | undefined
+  ): number {
+    const tokens = tokenOf(contentStr);
+    const redact = ctx.redactOf?.(contentStr);
+    const entry: LedgerEntry = {
+      id: `ledger-${ledgerCounter++}`,
+      turnId,
+      introducedBySpanId,
+      source,
+      tokens,
+      contentRedacted: redact?.redacted ?? contentStr,
+      sourceOffset: redact?.sourceOffset,
+      ts,
+    };
+    ledger.push(entry);
+    return tokens;
+  }
+
+  function openTurn(evt: any, implicit: boolean): Turn {
+    const turn: Turn = {
+      id: evt?.uuid ?? `turn-${turnIndex}`,
+      index: turnIndex++,
+      startTs: evt?.timestamp,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+      },
+    };
+    if (implicit) turn.id = `implicit-${turn.index}`;
+    turns.push(turn);
+    return turn;
+  }
 
   for (const evt of events) {
     if (!evt || typeof evt !== 'object') continue;
 
-    // --- Turn boundary: user prompt events start a new turn. ---------------
-    if (isUserPromptEvent(evt)) {
-      const turn: Turn = {
-        id: evt.uuid ?? `turn-${turnIndex}`,
-        index: turnIndex++,
-        startTs: evt.timestamp,
-        usage: {
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheCreationTokens: 0,
-          cacheReadTokens: 0,
-        },
-      };
-      turns.push(turn);
+    // -----------------------------------------------------------------------
+    // 1) User event — may be a prompt (starts a turn) OR a tool_result carrier.
+    // -----------------------------------------------------------------------
+    if (evt.type === 'user') {
+      // Attach tool_result content to previously-opened tool spans, if any.
+      const content = evt.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && typeof block === 'object' && block.type === 'tool_result') {
+            const target = toolUseIdToSpan.get(block.tool_use_id);
+            if (target) {
+              const outStr = stringifyContent(block.content);
+              target.outputs = outStr;
+              // Record tool_result in ledger (content entering context).
+              if (target.turnId) {
+                const tokens = addLedger(
+                  target.turnId,
+                  target.id,
+                  'tool_result',
+                  outStr,
+                  evt.timestamp
+                );
+                target.tokensConsumed += tokens;
+              }
+            }
+          }
+        }
+      }
+
+      if (!isUserPromptEvent(evt)) continue;
+
+      const turn = openTurn(evt, false);
       currentTurn = turn;
 
-      if (!session.firstPrompt && typeof evt.message?.content === 'string') {
-        session.firstPrompt = evt.message.content;
-      }
+      const promptText = typeof content === 'string' ? content : stringifyContent(content);
+      if (!session.firstPrompt) session.firstPrompt = promptText;
       if (!session.startTs) session.startTs = evt.timestamp;
 
-      // Emit a user_prompt span for the prompt itself.
       const promptSpan: ActionSpan = {
-        id: evt.uuid ?? `user-prompt-${turnIndex}`,
+        id: evt.uuid ?? `span-${spanCounter++}`,
         type: 'user_prompt',
         turnId: turn.id,
         parentSpanId: evt.parentUuid ?? undefined,
         childSpanIds: [],
         startTs: evt.timestamp,
         tokensConsumed: 0,
+        inputs: promptText,
       };
       spans.push(promptSpan);
 
-      // Ledger entry for prompt content.
-      const contentStr = stringifyContent(evt.message?.content);
-      const tokens = ctx.tokenOf ? ctx.tokenOf(contentStr) : 0;
-      const redact = ctx.redactOf?.(contentStr);
-      const entry: LedgerEntry = {
-        id: `ledger-${ledgerCounter++}`,
-        turnId: turn.id,
-        introducedBySpanId: promptSpan.id,
-        source: 'user_prompt',
-        tokens,
-        contentRedacted: redact?.redacted ?? contentStr,
-        sourceOffset: redact?.sourceOffset,
-        ts: evt.timestamp,
-      };
-      ledger.push(entry);
+      const tokens = addLedger(turn.id, promptSpan.id, 'user_prompt', promptText, evt.timestamp);
       promptSpan.tokensConsumed += tokens;
-
       continue;
     }
 
-    // --- Assistant events: one span per content block. ---------------------
+    // -----------------------------------------------------------------------
+    // 2) Assistant event — one span per content block.
+    // -----------------------------------------------------------------------
     if (evt.type === 'assistant') {
-      if (!currentTurn) {
-        // Assistant without a user turn — synthesize an implicit turn.
-        const turn: Turn = {
-          id: `implicit-${turnIndex}`,
-          index: turnIndex++,
-          startTs: evt.timestamp,
-          usage: {
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheCreationTokens: 0,
-            cacheReadTokens: 0,
-          },
-        };
-        turns.push(turn);
-        currentTurn = turn;
-      }
+      if (!currentTurn) currentTurn = openTurn(evt, true);
 
-      // Credit usage to the current turn ONCE per message.id (CC splits one
-      // assistant message across multiple events that share usage).
+      // --- Credit usage once per message.id. ---
       const usage = evt.message?.usage;
       const messageId: string | undefined = evt.message?.id;
-      if (usage && currentTurn.usage && messageId && !countedMessageIds.has(messageId)) {
-        currentTurn.usage.inputTokens += Number(usage.input_tokens ?? 0);
-        currentTurn.usage.outputTokens += Number(usage.output_tokens ?? 0);
-        currentTurn.usage.cacheCreationTokens += Number(usage.cache_creation_input_tokens ?? 0);
-        currentTurn.usage.cacheReadTokens += Number(usage.cache_read_input_tokens ?? 0);
-        if (typeof usage.thinking_tokens === 'number') {
-          currentTurn.usage.thinkingTokens =
-            (currentTurn.usage.thinkingTokens ?? 0) + usage.thinking_tokens;
+      const alreadyCounted = messageId ? countedMessageIds.has(messageId) : false;
+      if (usage && currentTurn.usage && !alreadyCounted) {
+        // Plan line 161: SUM over iterations[] when present → those ARE the
+        // true per-turn totals. Otherwise fall back to the top-level counters.
+        const iters = Array.isArray(usage.iterations) ? usage.iterations : null;
+        let inp = 0,
+          outp = 0,
+          cc = 0,
+          cr = 0,
+          thk = 0;
+        if (iters && iters.length > 0) {
+          for (const it of iters) {
+            inp += Number(it?.input_tokens ?? 0);
+            outp += Number(it?.output_tokens ?? 0);
+            cc += Number(it?.cache_creation_input_tokens ?? 0);
+            cr += Number(it?.cache_read_input_tokens ?? 0);
+            if (typeof it?.thinking_tokens === 'number') thk += it.thinking_tokens;
+          }
+          currentTurn.usage.iterationCount = (currentTurn.usage.iterationCount ?? 0) + iters.length;
+        } else {
+          inp = Number(usage.input_tokens ?? 0);
+          outp = Number(usage.output_tokens ?? 0);
+          cc = Number(usage.cache_creation_input_tokens ?? 0);
+          cr = Number(usage.cache_read_input_tokens ?? 0);
+          if (typeof usage.thinking_tokens === 'number') thk = usage.thinking_tokens;
+          currentTurn.usage.iterationCount = (currentTurn.usage.iterationCount ?? 0) + 1;
         }
-        countedMessageIds.add(messageId);
-      } else if (usage && currentTurn.usage && !messageId) {
-        // No messageId to dedupe on — credit once per event (best effort).
-        currentTurn.usage.inputTokens += Number(usage.input_tokens ?? 0);
-        currentTurn.usage.outputTokens += Number(usage.output_tokens ?? 0);
-        currentTurn.usage.cacheCreationTokens += Number(usage.cache_creation_input_tokens ?? 0);
-        currentTurn.usage.cacheReadTokens += Number(usage.cache_read_input_tokens ?? 0);
+        currentTurn.usage.inputTokens += inp;
+        currentTurn.usage.outputTokens += outp;
+        currentTurn.usage.cacheCreationTokens += cc;
+        currentTurn.usage.cacheReadTokens += cr;
+        if (thk > 0) {
+          currentTurn.usage.thinkingTokens = (currentTurn.usage.thinkingTokens ?? 0) + thk;
+        }
+        if (messageId) countedMessageIds.add(messageId);
       }
 
       currentTurn.endTs = evt.timestamp;
@@ -288,72 +432,165 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
 
       const blocks: any[] = Array.isArray(evt.message?.content) ? evt.message.content : [];
 
-      // One span per assistant event (covers all its blocks — usually 1).
-      // Span type derived from the first meaningful block.
-      const firstBlock = blocks[0];
-      const spanType: SpanType = firstBlock
-        ? blockSpanType(firstBlock.type, firstBlock.name)
-        : eventSpanType(evt.type);
-
-      const span: ActionSpan = {
-        id: evt.uuid,
-        type: spanType,
-        name: firstBlock?.name,
-        turnId: currentTurn.id,
-        parentSpanId: evt.parentUuid ?? undefined,
-        childSpanIds: [],
-        startTs: evt.timestamp,
-        tokensConsumed: 0,
-      };
-      spans.push(span);
-
-      // Ledger entry per content block.
+      // Emit ONE span per content block. When an assistant event has multiple
+      // blocks, all but the first get synthetic IDs derived from evt.uuid.
+      let blockIdx = 0;
       for (const block of blocks) {
-        const contentStr =
-          typeof block?.text === 'string'
-            ? block.text
-            : typeof block?.thinking === 'string'
-              ? block.thinking
-              : stringifyContent(block?.input ?? block);
-        const tokens = ctx.tokenOf ? ctx.tokenOf(contentStr) : 0;
-        const redact = ctx.redactOf?.(contentStr);
-        const entry: LedgerEntry = {
-          id: `ledger-${ledgerCounter++}`,
+        const classified = classifyAssistantBlock(block);
+
+        // For thinking blocks we suppress the span entirely when under
+        // threshold — they are still recorded in the ledger (content entered
+        // context) so token accounting stays honest.
+        let contentStr: string;
+        if (block?.type === 'text') contentStr = typeof block.text === 'string' ? block.text : '';
+        else if (block?.type === 'thinking')
+          contentStr = typeof block.thinking === 'string' ? block.thinking : '';
+        else if (block?.type === 'tool_use') contentStr = stringifyContent(block.input ?? {});
+        else contentStr = stringifyContent(block);
+
+        const blockTokens = tokenOf(contentStr);
+
+        if (block?.type === 'thinking' && blockTokens <= THINKING_TOKEN_THRESHOLD) {
+          // No rendered span — still ledger.
+          if (currentTurn)
+            addLedger(currentTurn.id, undefined, 'thinking', contentStr, evt.timestamp);
+          blockIdx++;
+          continue;
+        }
+
+        const spanId =
+          blockIdx === 0 ? (evt.uuid ?? `span-${spanCounter++}`) : `${evt.uuid}::${blockIdx}`;
+
+        const span: ActionSpan = {
+          id: spanId,
+          type: classified.type,
+          name: classified.name,
           turnId: currentTurn.id,
-          introducedBySpanId: span.id,
-          source: block?.type ?? 'assistant',
-          tokens,
-          contentRedacted: redact?.redacted ?? contentStr,
-          sourceOffset: redact?.sourceOffset,
-          ts: evt.timestamp,
+          parentSpanId: evt.parentUuid ?? undefined,
+          childSpanIds: [],
+          startTs: evt.timestamp,
+          tokensConsumed: 0,
         };
-        ledger.push(entry);
+
+        // Populate inputs/outputs.
+        if (block?.type === 'text') {
+          span.outputs = contentStr;
+        } else if (block?.type === 'thinking') {
+          span.outputs = contentStr;
+        } else if (block?.type === 'tool_use') {
+          span.inputs = block.input ?? {};
+          if (typeof block.id === 'string') {
+            toolUseIdToSpan.set(block.id, span);
+            span.metadata = { ...(span.metadata ?? {}), toolUseId: block.id };
+          }
+        }
+
+        spans.push(span);
+
+        const tokens = addLedger(
+          currentTurn.id,
+          span.id,
+          block?.type ?? 'assistant',
+          contentStr,
+          evt.timestamp
+        );
         span.tokensConsumed += tokens;
+
+        blockIdx++;
       }
 
       continue;
     }
 
-    // --- Everything else: emit a span with a reasonable type. --------------
-    const spanType = eventSpanType(evt.type ?? 'unknown');
+    // -----------------------------------------------------------------------
+    // 3) Attachment events (hook_success, skill_listing, …).
+    // -----------------------------------------------------------------------
+    if (evt.type === 'attachment') {
+      const classified = classifyAttachment(evt);
+      const span: ActionSpan = {
+        id: evt.uuid ?? `span-${spanCounter++}`,
+        type: classified.type,
+        name: classified.name,
+        turnId: currentTurn?.id,
+        parentSpanId: evt.parentUuid ?? undefined,
+        childSpanIds: [],
+        startTs: evt.timestamp,
+        tokensConsumed: 0,
+      };
+
+      const atype = evt.attachment?.type;
+      if (atype === 'hook_success' || atype === 'hook_additional_context') {
+        span.outputs = {
+          command: evt.attachment?.command,
+          content: evt.attachment?.content,
+          stdout: evt.attachment?.stdout,
+          stderr: evt.attachment?.stderr,
+          exitCode: evt.attachment?.exitCode,
+        };
+      } else if (atype === 'skill_listing') {
+        span.outputs = evt.attachment?.content;
+      } else {
+        span.metadata = { ...(span.metadata ?? {}), rawEvent: evt };
+      }
+
+      spans.push(span);
+
+      if (currentTurn) {
+        const contentStr = stringifyContent(span.outputs ?? span.name ?? '');
+        const tokens = addLedger(currentTurn.id, span.id, 'attachment', contentStr, evt.timestamp);
+        span.tokensConsumed += tokens;
+      }
+      continue;
+    }
+
+    // -----------------------------------------------------------------------
+    // 4) System events (stop_hook_summary, bridge_status, informational, …).
+    // -----------------------------------------------------------------------
+    if (evt.type === 'system') {
+      const classified = classifySystem(evt);
+      const span: ActionSpan = {
+        id: evt.uuid ?? `span-${spanCounter++}`,
+        type: classified.type,
+        name: classified.name,
+        turnId: currentTurn?.id,
+        parentSpanId: evt.parentUuid ?? undefined,
+        childSpanIds: [],
+        startTs: evt.timestamp,
+        tokensConsumed: 0,
+      };
+      if (evt.subtype === 'stop_hook_summary') {
+        span.outputs = {
+          hookCount: evt.hookCount,
+          hookInfos: evt.hookInfos,
+          hookErrors: evt.hookErrors,
+          preventedContinuation: evt.preventedContinuation,
+          stopReason: evt.stopReason,
+        };
+      } else {
+        span.metadata = { ...(span.metadata ?? {}), rawEvent: evt };
+      }
+      spans.push(span);
+      continue;
+    }
+
+    // -----------------------------------------------------------------------
+    // 5) Anything else → unknown span preserving raw event.
+    // -----------------------------------------------------------------------
     const span: ActionSpan = {
-      id: evt.uuid ?? `span-${spans.length}`,
-      type: spanType === 'user_prompt' ? 'unknown' : spanType,
+      id: evt.uuid ?? `span-${spanCounter++}`,
+      type: 'unknown',
+      name: typeof evt.type === 'string' ? evt.type : undefined,
       turnId: currentTurn?.id,
       parentSpanId: evt.parentUuid ?? undefined,
       childSpanIds: [],
       startTs: evt.timestamp,
       tokensConsumed: 0,
+      metadata: { rawEvent: evt },
     };
-    // Unknown-type events should reliably report 'unknown' rather than
-    // mapping through eventSpanType's default.
-    if (!['user', 'assistant', 'system', 'attachment'].includes(evt.type)) {
-      span.type = 'unknown';
-    }
     spans.push(span);
   }
 
-  // --- Subagent join: enrich subagent spans with footer metadata. ----------
+  // --- Subagent join: enrich subagent spans with footer metadata (legacy). -
   if (ctx.subagentJoinResults && ctx.subagentJoinResults.length > 0) {
     const joinById = new Map(ctx.subagentJoinResults.map((r) => [r.agentId, r]));
     for (const span of spans) {
@@ -371,12 +608,17 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
   }
 
   // --- Build childSpanIds from parentSpanId. -------------------------------
+  // Note: L1.2 (subagent-joiner) will populate Agent span childSpanIds from
+  // the agent-<agentId>.jsonl sidecar. Here we only wire the parentUuid chain.
   const spanById = new Map(spans.map((s) => [s.id, s]));
   for (const span of spans) {
     if (!span.parentSpanId) continue;
     const parent = spanById.get(span.parentSpanId);
     if (parent) parent.childSpanIds.push(span.id);
   }
+  // Silence unused-var lint for GENERIC_TOOL_NAMES — reserved for future
+  // refinement of the tool_call catalog; referenced in a no-op here.
+  void GENERIC_TOOL_NAMES;
 
   return session;
 }
