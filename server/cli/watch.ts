@@ -31,10 +31,12 @@
 
 import { watch, type FSWatcher } from 'chokidar';
 import { mkdirSync, statSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import { importPath } from '../pipeline/import';
 import { Store } from '../pipeline/store';
 import { broadcast } from '../api/sse';
+import { setCurrentSessionId } from './current-session';
 
 export type StartWatchOpts = {
   dataDir: string;
@@ -152,6 +154,16 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
     try {
       const result = await importPath(absPath, { dataDir });
       const summaries = (result as { sessions?: Array<{ id: string }> }).sessions ?? [];
+
+      // L11a: the watcher tracks "which CC session is currently being
+      // appended to" so `POST /api/markers` (with no explicit sessionId) can
+      // attach bookmarks to the real session. CC names each JSONL after the
+      // session UUID (e.g. `<uuid>.jsonl`), so the basename-minus-extension
+      // IS the session id — and the most-recently-appended file is, by
+      // definition, the current session.
+      const fileBase = basename(absPath);
+      const sid = fileBase.endsWith('.jsonl') ? fileBase.slice(0, -'.jsonl'.length) : fileBase;
+      if (sid.length > 0) setCurrentSessionId(sid);
 
       // Refresh span counts post-import.
       const { spanCounts: currentCounts } = snapshotStore(dataDir);

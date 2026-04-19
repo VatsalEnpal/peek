@@ -25,6 +25,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 
 import type { Store, BookmarkRow } from '../pipeline/store';
 import { broadcast } from './sse';
+import { getCurrentSessionId } from '../cli/current-session';
 
 const LIVE_SENTINEL_SESSION_ID = 'live';
 
@@ -98,12 +99,51 @@ router.post('/', (req: Request, res: Response) => {
     return;
   }
   const store = req.app.locals.store as Store;
-  const sessionId =
-    typeof body.sessionId === 'string' && body.sessionId.length > 0
-      ? body.sessionId
-      : LIVE_SENTINEL_SESSION_ID;
+
+  // L11a session resolution order:
+  //   1. Explicit `sessionId` in the request body (test harnesses + callers
+  //      that DO know the id).
+  //   2. `getCurrentSessionId()` from the watcher — the real CC session UUID
+  //      derived from the most-recently-appended JSONL basename. This is the
+  //      common path for slash commands (/peek_start, /peek_end) which have
+  //      no reliable way to pass the session UUID themselves.
+  //   3. Literal "live" sentinel — only for fresh daemons that haven't seen
+  //      any Claude Code activity yet. Back-compat so first-run flows don't
+  //      404.
+  let sessionId: string;
+  let sessionIsWatcherDetected = false;
+  if (typeof body.sessionId === 'string' && body.sessionId.length > 0) {
+    sessionId = body.sessionId;
+  } else {
+    const detected = getCurrentSessionId();
+    if (detected) {
+      sessionId = detected;
+      sessionIsWatcherDetected = true;
+    } else {
+      sessionId = LIVE_SENTINEL_SESSION_ID;
+    }
+  }
   const ts = typeof body.timestamp === 'string' ? body.timestamp : new Date().toISOString();
   const name = typeof body.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : undefined;
+
+  // Auto-seed the session row for the bookmarks FK, BUT only when:
+  //   (a) the caller didn't use a watcher-detected id (the watcher already
+  //       imported that session — re-seeding via INSERT OR REPLACE would
+  //       clobber firstPrompt/slug/gitBranch/etc., the exact L11a bug), AND
+  //   (b) no row for that id already exists (otherwise an earlier import
+  //       of the same session would get stubbed out on every marker POST).
+  if (!sessionIsWatcherDetected && store.getSession(sessionId) === null) {
+    try {
+      store.putSession({
+        id: sessionId,
+        salt: 'peek-marker',
+        startTs: ts,
+        metadata: { seededByMarker: true },
+      });
+    } catch {
+      // If seeding fails the putBookmark below will surface the real error.
+    }
+  }
 
   if (type === 'start') {
     const row: BookmarkRow = {
