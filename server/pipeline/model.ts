@@ -43,12 +43,27 @@ export type TurnUsage = {
   iterationCount?: number;
 };
 
+/**
+ * Per-turn reconciliation snapshot (L1.5). Populated by `reconcileTurnTokens`
+ * after assembly: compares the model's reported usage against the sum of the
+ * turn's span `tokensConsumed`. Observability-only — never fatal.
+ */
+export type TurnReconciliation = {
+  match: boolean;
+  drift: number;
+  parentReported: number;
+  childSum: number;
+  threshold: number;
+};
+
 export type Turn = {
   id: string;
   index: number;
   startTs?: string;
   endTs?: string;
   usage?: TurnUsage;
+  /** L1.5 — runtime token reconciliation result for this turn. */
+  reconciliation?: TurnReconciliation;
 };
 
 export type ActionSpan = {

@@ -22,7 +22,7 @@ import { parseJsonl } from './parser';
 import { assembleSession, type Session, type LedgerSourceOffset } from './model';
 import { countTokensOffline, countTokensViaAPI } from './tokenizer';
 import { redactBlock, createSessionSalt, sourceLineHash } from './redactor';
-import { reconcileSubagentTokens } from './self-check';
+import { reconcileSubagentTokens, reconcileTurnTokens } from './self-check';
 import { Store, type SessionRow, type TurnRow, type SpanRow, type LedgerEntryRow } from './store';
 import { joinSubagentsIntoSession } from './subagent-joiner';
 import { detectMarkers } from '../bookmarks/marker-detector';
@@ -529,6 +529,22 @@ async function importSingleFile(
 
   // 5. Compute drift warnings for each subagent span with reported metadata.
   const drifts: DriftWarning[] = [];
+
+  // 5a. Per-turn runtime reconciliation (L1.5, plan line 177). Mutates each
+  //     Turn with a `reconciliation` snapshot and emits a console.warn for
+  //     drift > 5%. Observability only — never fatal.
+  const turnReconciliations = reconcileTurnTokens(session, 0.05);
+  for (const r of turnReconciliations) {
+    if (!r.match && Number.isFinite(r.drift)) {
+      const turn = session.turns.find((t) => t.id === r.turnId);
+      drifts.push({
+        sessionId: session.id,
+        turn: turn?.index ?? -1,
+        drift: r.drift,
+      });
+    }
+  }
+
   for (const span of session.spans) {
     if (span.type !== 'subagent') continue;
     const reported = span.metadata?.['reportedTotalTokens'];
