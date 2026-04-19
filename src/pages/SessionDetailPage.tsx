@@ -32,6 +32,7 @@ import { Inspector } from '../components/Inspector';
 import { FilterChips } from '../components/FilterChips';
 import { RecordButton } from '../components/RecordButton';
 import { ContextGauge } from '../components/ContextGauge';
+import { computeContextGaugeStats } from '../lib/contextGauge';
 import { FocusBar } from '../components/FocusBar';
 import { KbHelp } from '../components/KbHelp';
 import { ImportDialog } from '../components/ImportDialog';
@@ -183,20 +184,10 @@ export function SessionDetailPage(): ReactElement {
   // Currently-viewed session summary (for title/metadata).
   const summary = useMemo(() => sessions.find((s) => s.id === id) ?? null, [sessions, id]);
 
-  // Aggregate context tokens for the gauge — sum of ledger tokens across the
-  // session. Falls back to session.totalTokens if no ledger exists yet.
-  const contextTokens = useMemo(() => {
-    let t = 0;
-    let anyLedger = false;
-    for (const e of events) {
-      if (e.kind === 'ledger') {
-        t += e.tokens ?? 0;
-        anyLedger = true;
-      }
-    }
-    if (anyLedger) return t;
-    return summary?.totalTokens ?? 0;
-  }, [events, summary]);
+  // L2.4 — gauge stats: max-per-turn (compared against 200k), cumulative, and
+  // turn count for the secondary line. Cumulative is NOT what drives the bar;
+  // it's the faint provenance stat users can glance at.
+  const gaugeStats = useMemo(() => computeContextGaugeStats(events), [events]);
 
   const spanCount = useMemo(() => events.filter((e) => e.kind === 'span').length, [events]);
 
@@ -376,7 +367,12 @@ export function SessionDetailPage(): ReactElement {
       </div>
 
       {/* ── context gauge ── */}
-      <ContextGauge tokens={contextTokens} testId="session-context-gauge" />
+      <ContextGauge
+        tokens={gaugeStats.maxPerTurn}
+        cumulative={gaugeStats.cumulative}
+        turnCount={gaugeStats.turnCount}
+        testId="session-context-gauge"
+      />
 
       {/* ── filter chips ── */}
       <div

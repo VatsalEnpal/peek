@@ -1,16 +1,15 @@
 // @vitest-environment happy-dom
 /**
- * L3.6 focused unit tests for `<ContextGauge />`.
+ * L2.4 focused unit tests for `<ContextGauge />`.
  *
  * Scope:
  *   1. Renders `X / 200,000` with tabular-nums.
- *   2. Color bands at 50 % (green), 75 % (amber), 95 % (red) match the spec:
- *        0 – 60 %  → peek-ok
- *        60 – 90 % → peek-accent
- *        90+ %     → peek-bad
+ *   2. Color: amber under 100 %, red at/above 100 %  (post-L2.4 downgrade
+ *      from the old green/amber/red tri-band — see component docstring).
  *   3. When tokens > max the bar clamps to 100 % width and is marked `data-over`.
- *   4. `gaugeColor` pure helper picks the same bands so the threshold logic
- *      is regression-testable without rendering.
+ *   4. `gaugeColor` pure helper matches the two-band rule.
+ *   5. Secondary line renders only when both `cumulative` + `turnCount` are
+ *      supplied, and reads as "cumulative N tokens across M turns".
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,23 +21,18 @@ afterEach(() => {
   cleanup();
 });
 
-describe('gaugeColor thresholds', () => {
-  it('returns ok (green) below 60%', () => {
-    expect(gaugeColor(0)).toBe('var(--peek-ok)');
-    expect(gaugeColor(0.5)).toBe('var(--peek-ok)');
-    expect(gaugeColor(0.599)).toBe('var(--peek-ok)');
+describe('gaugeColor thresholds (L2.4 two-band)', () => {
+  it('returns accent (amber) anywhere under 100%', () => {
+    expect(gaugeColor(0)).toBe('var(--peek-accent)');
+    expect(gaugeColor(0.5)).toBe('var(--peek-accent)');
+    expect(gaugeColor(0.8)).toBe('var(--peek-accent)');
+    expect(gaugeColor(0.95)).toBe('var(--peek-accent)');
+    expect(gaugeColor(0.999)).toBe('var(--peek-accent)');
   });
 
-  it('returns accent (amber) between 60% and 90%', () => {
-    expect(gaugeColor(0.6)).toBe('var(--peek-accent)');
-    expect(gaugeColor(0.75)).toBe('var(--peek-accent)');
-    expect(gaugeColor(0.899)).toBe('var(--peek-accent)');
-  });
-
-  it('returns bad (red) at or above 90%', () => {
-    expect(gaugeColor(0.9)).toBe('var(--peek-bad)');
-    expect(gaugeColor(0.95)).toBe('var(--peek-bad)');
+  it('returns bad (red) at or above 100%', () => {
     expect(gaugeColor(1)).toBe('var(--peek-bad)');
+    expect(gaugeColor(1.5)).toBe('var(--peek-bad)');
   });
 });
 
@@ -49,20 +43,11 @@ describe('<ContextGauge /> rendering', () => {
     expect(gauge.textContent).toMatch(/context/i);
     expect(gauge.textContent).toContain('50,000');
     expect(gauge.textContent).toContain('200,000');
-    // The numeric element reads the monospace / tabular-nums class.
     const num = screen.getByTestId('context-gauge-num');
     expect(num.classList.contains('peek-num')).toBe(true);
   });
 
-  it('at 50% saturation paints the fill green (ok)', () => {
-    render(<ContextGauge tokens={100_000} max={200_000} />);
-    const gauge = screen.getByTestId('context-gauge');
-    expect(gauge.getAttribute('data-saturation')).toBe('0.50');
-    const fill = screen.getByTestId('context-gauge-fill');
-    expect(fill.style.background).toContain('--peek-ok');
-  });
-
-  it('at 75% saturation paints the fill amber (accent)', () => {
+  it('paints the fill amber at any saturation under 100%', () => {
     render(<ContextGauge tokens={150_000} max={200_000} />);
     const gauge = screen.getByTestId('context-gauge');
     expect(gauge.getAttribute('data-saturation')).toBe('0.75');
@@ -70,10 +55,14 @@ describe('<ContextGauge /> rendering', () => {
     expect(fill.style.background).toContain('--peek-accent');
   });
 
-  it('at 95% saturation paints the fill red (bad)', () => {
+  it('stays amber at 95 % (tolerance zone, not red)', () => {
     render(<ContextGauge tokens={190_000} max={200_000} />);
-    const gauge = screen.getByTestId('context-gauge');
-    expect(gauge.getAttribute('data-saturation')).toBe('0.95');
+    const fill = screen.getByTestId('context-gauge-fill');
+    expect(fill.style.background).toContain('--peek-accent');
+  });
+
+  it('paints red only once saturation reaches/exceeds 100 %', () => {
+    render(<ContextGauge tokens={200_000} max={200_000} />);
     const fill = screen.getByTestId('context-gauge-fill');
     expect(fill.style.background).toContain('--peek-bad');
   });
@@ -84,7 +73,6 @@ describe('<ContextGauge /> rendering', () => {
     expect(gauge.getAttribute('data-over')).toBe('true');
     expect(gauge.getAttribute('data-saturation')).toBe('1.00');
     const fill = screen.getByTestId('context-gauge-fill');
-    // Fill should be fully extended.
     expect(fill.style.right).toBe('0%');
     expect(fill.style.background).toContain('--peek-bad');
   });
@@ -93,5 +81,25 @@ describe('<ContextGauge /> rendering', () => {
     render(<ContextGauge tokens={10} max={100} testId="session-context-gauge" />);
     expect(screen.getByTestId('session-context-gauge')).toBeTruthy();
     expect(screen.queryByTestId('context-gauge')).toBeNull();
+  });
+
+  it('hides the secondary line when cumulative/turnCount are not provided', () => {
+    render(<ContextGauge tokens={100} />);
+    expect(screen.queryByTestId('context-gauge-secondary')).toBeNull();
+  });
+
+  it('renders secondary line "cumulative N tokens across M turns" when provided', () => {
+    render(<ContextGauge tokens={159_806} cumulative={30_614_665} turnCount={44} />);
+    const sec = screen.getByTestId('context-gauge-secondary');
+    expect(sec.textContent).toContain('30,614,665');
+    expect(sec.textContent).toContain('44');
+    expect(sec.textContent?.toLowerCase()).toContain('cumulative');
+    expect(sec.textContent?.toLowerCase()).toContain('turns');
+  });
+
+  it('uses singular "turn" when turnCount is 1', () => {
+    render(<ContextGauge tokens={100} cumulative={100} turnCount={1} />);
+    const sec = screen.getByTestId('context-gauge-secondary');
+    expect(sec.textContent).toMatch(/1 turn(?!s)/);
   });
 });
