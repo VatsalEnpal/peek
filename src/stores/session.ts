@@ -192,54 +192,98 @@ export function spanVisible(type: string, active: Set<ChipKey>): boolean {
 }
 
 /**
- * Build a display list — respects filters + expand state. Ledger entries are
- * dropped from the flat timeline (they surface in the inspector); the user
- * cares about spans at this level.
+ * Build a display list — respects chip filters.
+ *
+ * Design (Option A, flat chronological stream — v0.2):
+ *   - Every span that passes the chip filter is emitted exactly once.
+ *   - Sort by startTs ascending with null/invalid timestamps sunk to the bottom
+ *     so the viewport shows real chronological events first.
+ *   - `depth` is computed from the parentSpanId chain length (capped at 4) so
+ *     children are visually indented, without requiring an expand click.
+ *   - Orphan children (parentSpanId points at a span that was filtered out or
+ *     was never ingested — common for subagent cross-session boundaries) are
+ *     rescued as root-level rows rather than silently dropped.
+ *   - Duplicate span ids collapse to the first occurrence.
+ *   - `expanded` is kept in the signature for forward compatibility with a
+ *     future Option B cascade UI; in Option A every child is already visible
+ *     so the set is unused. `hasChildren` still lights up the ▶ marker so
+ *     users can visually see the parent/child relationship.
+ *
+ * Ledger entries are dropped from the flat timeline — they surface in the
+ * inspector; the user cares about spans at this level.
  */
+// Cap how deep we'll indent so a pathologically-nested trace can't push the
+// name column off-screen. 4 levels * 2ch = 8ch of left padding, plenty.
+const MAX_DEPTH = 4;
+
 export function buildTimelineRows(
   events: StoreEvent[],
   active: Set<ChipKey>,
-  expanded: Set<string>
+  _expanded: Set<string>
 ): Array<SpanEvent & { depth: number; hasChildren: boolean }> {
-  const spans = events.filter((e): e is SpanEvent => e.kind === 'span');
-  const byParent = new Map<string | undefined, SpanEvent[]>();
-  for (const s of spans) {
-    const key = s.parentSpanId ?? undefined;
-    const arr = byParent.get(key) ?? [];
-    arr.push(s);
-    byParent.set(key, arr);
+  void _expanded; // reserved for cascade re-introduction; see docstring.
+
+  // 1. Pull spans + dedupe by id (guard against duplicate ingestion).
+  const byId = new Map<string, SpanEvent>();
+  for (const e of events) {
+    if (e.kind !== 'span') continue;
+    if (!byId.has(e.id)) byId.set(e.id, e);
   }
 
-  // Sort each sibling group by startTs ascending; null/invalid-ts rows sink
-  // to the bottom so the viewport shows real chronological events first
-  // (fix for BLOCKING finding: Claude-Code lifecycle noise was rendering at
-  // the top of the timeline, hiding the 178 rich tool_call spans).
+  // 2. Count direct children per span so we can render the ▶ indicator.
+  const childCount = new Map<string, number>();
+  for (const s of byId.values()) {
+    const p = s.parentSpanId;
+    if (!p) continue;
+    if (!byId.has(p)) continue; // orphan — not a real parent in this payload.
+    childCount.set(p, (childCount.get(p) ?? 0) + 1);
+  }
+
+  // 3. Compute depth by walking the parent chain. Orphan parentSpanId (pointing
+  //    at a span that isn't in the payload) is treated as a root (depth 0).
+  //    Guard against malformed cycles with a visited set + explicit cap.
+  const depthOf = (span: SpanEvent): number => {
+    let d = 0;
+    let cur: SpanEvent | undefined = span;
+    const seen = new Set<string>();
+    while (cur && cur.parentSpanId && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      const parent = byId.get(cur.parentSpanId);
+      if (!parent) break; // orphan — stop here, treat as root-of-chain.
+      d += 1;
+      if (d >= MAX_DEPTH) return MAX_DEPTH;
+      cur = parent;
+    }
+    return d;
+  };
+
+  // 4. Filter by chip + attach computed fields.
   const tsRank = (s: SpanEvent): number => {
     if (!s.startTs) return Number.POSITIVE_INFINITY;
     const n = Date.parse(s.startTs);
     return Number.isNaN(n) ? Number.POSITIVE_INFINITY : n;
   };
-  for (const [, arr] of byParent) {
-    arr.sort((a, b) => {
-      const aRank = tsRank(a);
-      const bRank = tsRank(b);
-      if (aRank !== bRank) return aRank - bRank;
-      // Stable-ish tiebreaker on id so tests stay deterministic.
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
+  const rows: Array<SpanEvent & { depth: number; hasChildren: boolean }> = [];
+  for (const s of byId.values()) {
+    if (!spanVisible(s.type, active)) continue;
+    rows.push({
+      ...s,
+      depth: depthOf(s),
+      hasChildren: (childCount.get(s.id) ?? 0) > 0,
     });
   }
 
-  const out: Array<SpanEvent & { depth: number; hasChildren: boolean }> = [];
-  const walk = (span: SpanEvent, depth: number): void => {
-    if (!spanVisible(span.type, active)) return;
-    const children = byParent.get(span.id) ?? [];
-    out.push({ ...span, depth, hasChildren: children.length > 0 });
-    if (children.length > 0 && expanded.has(span.id)) {
-      for (const c of children) walk(c, depth + 1);
-    }
-  };
-  for (const root of byParent.get(undefined) ?? []) walk(root, 0);
-  return out;
+  // 5. Global chronological sort. Stable tiebreaker on id for deterministic
+  //    output under identical timestamps (common for CC lifecycle pairs).
+  rows.sort((a, b) => {
+    const aRank = tsRank(a);
+    const bRank = tsRank(b);
+    if (aRank !== bRank) return aRank - bRank;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+
+  return rows;
 }
 
 export type { SpanType };

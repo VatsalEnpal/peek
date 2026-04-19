@@ -148,9 +148,17 @@ describe('app shell', () => {
     expect(userRow).toBeTruthy();
     expect(userRow!.getAttribute('data-span-type')).toBe('user_prompt');
     expect(userRow!.textContent).toContain('debug the thing');
-    // Cascade toggle exists because span-user-1 has a child span.
+    // Cascade marker exists because span-user-1 has a child span. Under
+    // Option A the child is already rendered inline, so the marker is purely
+    // a visual grouping indicator — but the DOM hook must remain for tests
+    // and for the future Option B toggle.
     const toggle = userRow!.querySelector('[data-testid="cascade-toggle"]');
     expect(toggle).toBeTruthy();
+    // The child tool_call row must also appear in the flat stream — this is
+    // the BLOCKING-1 invariant (child spans must not be orphaned).
+    const toolRow = rows.find((r) => r.getAttribute('data-span-id') === 'span-tool-1');
+    expect(toolRow).toBeTruthy();
+    expect(toolRow!.getAttribute('data-span-type')).toBe('tool_call');
 
     // Click the user row — inspector opens with the span name.
     fireEvent.click(userRow!);
@@ -170,23 +178,26 @@ describe('app shell', () => {
     expect(spanVisible('memory_read', active)).toBe(false);
     expect(spanVisible('unknown', active)).toBe(true); // not covered by any chip
 
-    // buildTimelineRows: root-only when collapsed, includes child when expanded.
+    // buildTimelineRows (Option A): every span passing chip filters is
+    // present in one flat chronological list — including children. BLOCKING-1
+    // fix: tool_call spans must appear in the top-level stream.
     const rows = buildTimelineRows(
       EVENTS as Parameters<typeof buildTimelineRows>[0],
       new Set(['prompts', 'files', 'skills', 'hooks', 'api', 'tools', 'subagents']),
       new Set()
     );
-    const rootIds = rows.map((r) => r.id);
-    expect(rootIds).toContain('span-user-1');
-    expect(rootIds).toContain('span-file-1');
-    expect(rootIds).not.toContain('span-tool-1');
+    const rowIds = rows.map((r) => r.id);
+    expect(rowIds).toContain('span-user-1');
+    expect(rowIds).toContain('span-file-1');
+    expect(rowIds).toContain('span-tool-1');
 
+    // Expanded set is a no-op under Option A — same rows either way.
     const rowsExpanded = buildTimelineRows(
       EVENTS as Parameters<typeof buildTimelineRows>[0],
       new Set(['prompts', 'files', 'skills', 'hooks', 'api', 'tools', 'subagents']),
       new Set(['span-user-1'])
     );
-    expect(rowsExpanded.map((r) => r.id)).toContain('span-tool-1');
+    expect(rowsExpanded.map((r) => r.id)).toEqual(rowIds);
 
     // Selection store: selectSpan opens the drawer.
     useSelectionStore.getState().selectSpan('span-tool-1');

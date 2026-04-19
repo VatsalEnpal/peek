@@ -40,6 +40,9 @@ export function TimelineRow({
   onSelect,
   onToggleExpand,
 }: Props): ReactElement {
+  // `expanded` is retained on the Props contract for the future Option B
+  // cascade UI; currently unused under Option A (children render flat).
+  void expanded;
   const name = span.name ?? span.type;
   const contextMenuRowId = useSelectionStore((s) => s.contextMenuRowId);
   const openContextMenu = useSelectionStore((s) => s.openContextMenu);
@@ -161,24 +164,27 @@ export function TimelineRow({
         </span>
         {hasChildren ? (
           <span
-            role="button"
-            aria-label={expanded ? 'collapse' : 'expand'}
+            // v0.2 Option A: children already render flat-indented in the
+            // stream. The marker is a purely visual parent/group indicator;
+            // clicking is a no-op (the underlying row-click still selects).
+            // Keep data-testid + onClick wiring so future Option B can swap
+            // in a real expand toggle without churn.
+            aria-label="group"
             data-testid="cascade-toggle"
             onClick={(e): void => {
               e.stopPropagation();
               onToggleExpand();
             }}
             style={{
-              color: 'var(--peek-fg-dim)',
+              color: 'var(--peek-fg-faint)',
               fontSize: 'var(--peek-fs-xs)',
-              transition: 'transform 80ms ease-out',
-              transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
               display: 'inline-block',
               textAlign: 'center',
               width: 16,
+              cursor: 'default',
             }}
           >
-            ▶
+            ▸
           </span>
         ) : (
           <span />
