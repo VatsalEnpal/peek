@@ -3,11 +3,15 @@
  * Monospace-column-safe (fixed-width outputs) so the timeline stays grid-locked.
  */
 
-/** `HH:MM:SS` in local TZ. Returns `--:--:--` for missing input. */
+/**
+ * `HH:MM:SS` in local TZ. Returns `—:—:—` (em-dash) for missing or unparseable
+ * input. Em-dash matches peek's design language (same glyph as `formatTokens`
+ * null case) and the visual spec in `/tmp/peek-mockup.html`.
+ */
 export function formatClock(iso: string | undefined | null): string {
-  if (!iso) return '--:--:--';
+  if (!iso) return '—:—:—';
   const t = new Date(iso);
-  if (Number.isNaN(t.getTime())) return '--:--:--';
+  if (Number.isNaN(t.getTime())) return '—:—:—';
   const pad = (n: number): string => String(n).padStart(2, '0');
   return `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
 }

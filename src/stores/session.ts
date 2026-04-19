@@ -40,6 +40,14 @@ export type SpanEvent = {
   startTs?: string;
   endTs?: string;
   durationMs?: number;
+  /**
+   * Optional per-span token attribution set by the pipeline.
+   * Some builders emit `tokensConsumed` (preferred); others emit `tokens`.
+   * The Timeline reads `tokensConsumed ?? tokens` as a fallback when no
+   * ledger rows exist for the span.
+   */
+  tokensConsumed?: number;
+  tokens?: number;
   inputs?: unknown;
   outputs?: unknown;
   metadata?: Record<string, unknown>;
@@ -200,6 +208,25 @@ export function buildTimelineRows(
     const arr = byParent.get(key) ?? [];
     arr.push(s);
     byParent.set(key, arr);
+  }
+
+  // Sort each sibling group by startTs ascending; null/invalid-ts rows sink
+  // to the bottom so the viewport shows real chronological events first
+  // (fix for BLOCKING finding: Claude-Code lifecycle noise was rendering at
+  // the top of the timeline, hiding the 178 rich tool_call spans).
+  const tsRank = (s: SpanEvent): number => {
+    if (!s.startTs) return Number.POSITIVE_INFINITY;
+    const n = Date.parse(s.startTs);
+    return Number.isNaN(n) ? Number.POSITIVE_INFINITY : n;
+  };
+  for (const [, arr] of byParent) {
+    arr.sort((a, b) => {
+      const aRank = tsRank(a);
+      const bRank = tsRank(b);
+      if (aRank !== bRank) return aRank - bRank;
+      // Stable-ish tiebreaker on id so tests stay deterministic.
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
   }
 
   const out: Array<SpanEvent & { depth: number; hasChildren: boolean }> = [];

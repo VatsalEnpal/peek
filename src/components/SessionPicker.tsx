@@ -133,6 +133,7 @@ export function SessionPicker(): ReactElement {
           {sessions.map((s) => {
             const isOpen = expanded.has(s.id);
             const bookmarks = bySession[s.id] ?? [];
+            const isSelected = selectedId === s.id;
             return (
               <li key={s.id} data-testid={`session-row-${s.id}`}>
                 <div
@@ -167,12 +168,35 @@ export function SessionPicker(): ReactElement {
                   >
                     ▶
                   </button>
-                  <span
+                  {/*
+                    Checker BLOCKING: `<select><option>` traps e2e-script clicks.
+                    Render each session label as a real button so any click
+                    target (including plain `click()`) navigates to detail.
+                  */}
+                  <button
+                    type="button"
+                    data-testid={`session-select-${s.id}`}
+                    aria-pressed={isSelected}
+                    onClick={(): void => {
+                      void selectSession(s.id);
+                    }}
                     className="peek-mono"
-                    style={{ color: 'var(--peek-fg-dim)', letterSpacing: '0.04em' }}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid transparent',
+                      padding: '1px 4px',
+                      color: isSelected ? 'var(--peek-accent)' : 'var(--peek-fg-dim)',
+                      letterSpacing: '0.04em',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: 'var(--peek-fs-xs)',
+                      borderLeft: isSelected
+                        ? '2px solid var(--peek-accent)'
+                        : '2px solid transparent',
+                    }}
                   >
                     {truncate(s.label, 40)}
-                  </span>
+                  </button>
                 </div>
                 {isOpen && (
                   <ul

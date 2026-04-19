@@ -7,7 +7,7 @@ import type { ReactElement } from 'react';
  * wired here so dropping in recording-mode UIs is a one-line swap.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { useSessionStore, buildTimelineRows } from '../stores/session';
 import { useSelectionStore } from '../stores/selection';
@@ -20,6 +20,7 @@ import { Inspector } from './Inspector';
 import { KbHelp } from './KbHelp';
 import { RecordButton } from './RecordButton';
 import { FocusBar } from './FocusBar';
+import { ImportDialog } from './ImportDialog';
 
 export function AppShell(): ReactElement {
   const fetchSessions = useSessionStore((s) => s.fetchSessions);
@@ -34,6 +35,8 @@ export function AppShell(): ReactElement {
   const closeDrawer = useSelectionStore((s) => s.closeDrawer);
   const toggleHelp = useSelectionStore((s) => s.toggleHelp);
   const setHelp = useSelectionStore((s) => s.setHelp);
+
+  const [importOpen, setImportOpen] = useState<boolean>(false);
 
   useEffect(() => {
     void fetchSessions();
@@ -163,6 +166,25 @@ export function AppShell(): ReactElement {
         <div style={{ width: 1, height: 18, background: 'var(--peek-border)' }} />
         <SessionPicker />
         <RecordButton />
+        <button
+          type="button"
+          data-testid="import-btn"
+          onClick={(): void => setImportOpen(true)}
+          aria-label="import sessions"
+          className="peek-mono"
+          style={{
+            padding: '4px 10px',
+            background: 'transparent',
+            border: '1px solid var(--peek-border)',
+            color: 'var(--peek-fg-dim)',
+            fontSize: 'var(--peek-fs-xs)',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}
+        >
+          Import
+        </button>
         <div style={{ width: 1, height: 18, background: 'var(--peek-border)' }} />
         <FilterChips />
         <div style={{ marginLeft: 'auto' }}>
@@ -203,6 +225,7 @@ export function AppShell(): ReactElement {
       </main>
 
       <KbHelp />
+      <ImportDialog open={importOpen} onClose={(): void => setImportOpen(false)} />
     </div>
   );
 }

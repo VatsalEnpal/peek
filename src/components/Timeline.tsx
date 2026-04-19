@@ -39,6 +39,24 @@ export function Timeline(): ReactElement {
     return m;
   }, [events]);
 
+  /**
+   * Prefer the ledger-aggregated token count; fall back to the span's own
+   * `tokensConsumed` (or `tokens`) field when present. Tool-call spans carry
+   * this directly and have no ledger rows, so without the fallback every row
+   * reads `—`.
+   */
+  const tokensFor = (r: {
+    id: string;
+    tokensConsumed?: number;
+    tokens?: number;
+  }): number | null => {
+    const fromLedger = tokensBySpan.get(r.id);
+    if (typeof fromLedger === 'number' && fromLedger > 0) return fromLedger;
+    const own = r.tokensConsumed ?? r.tokens;
+    if (typeof own === 'number' && own > 0) return own;
+    return null;
+  };
+
   if (!selectedSessionId) {
     return (
       <Empty>
@@ -84,7 +102,7 @@ export function Timeline(): ReactElement {
           hasChildren={r.hasChildren}
           expanded={expanded.has(r.id)}
           selected={selectedSpanId === r.id}
-          tokens={tokensBySpan.get(r.id) ?? null}
+          tokens={tokensFor(r)}
           inRange={inFocusRange(r.startTs, focusRange)}
           onSelect={(): void => selectSpan(r.id)}
           onToggleExpand={(): void => toggleExpand(r.id)}

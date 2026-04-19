@@ -148,8 +148,11 @@ export function TimelineRow({
         <span
           className="peek-num"
           style={{
-            color: tokens === null ? 'var(--peek-fg-faint)' : 'var(--peek-fg-dim)',
+            // Muted when missing; amber accent when numeric (labels muted,
+            // numbers prominent — see design principles).
+            color: tokens === null ? 'var(--peek-fg-faint)' : 'var(--peek-accent)',
             fontSize: 'var(--peek-fs-sm)',
+            fontVariantNumeric: 'tabular-nums',
             textAlign: 'right',
             minWidth: 64,
           }}
