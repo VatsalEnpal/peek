@@ -17,7 +17,7 @@ export type RecordingState = {
   label: string | null;
   error: string | null;
 
-  startRecording: (sessionId: string, label?: string) => Promise<void>;
+  startRecording: (sessionId: string, label?: string, spanId?: string) => Promise<void>;
   stopRecording: () => Promise<void>;
 };
 
@@ -30,17 +30,21 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
   label: null,
   error: null,
 
-  async startRecording(sessionId, label) {
+  async startRecording(sessionId, label, spanId) {
     if (get().isRecording) return;
     const startTs = new Date().toISOString();
     const trimmed = (label ?? '').trim();
+    // Build payload — only include spanId when we have one (server ignores
+    // unknown fields but we keep the wire minimal for clarity).
+    const payload: Record<string, unknown> = {
+      sessionId,
+      label: trimmed,
+      source: 'record',
+      startTs,
+    };
+    if (spanId) payload.spanId = spanId;
     try {
-      const res = await apiPost<BookmarkResponse>('/api/bookmarks', {
-        sessionId,
-        label: trimmed,
-        source: 'record',
-        startTs,
-      });
+      const res = await apiPost<BookmarkResponse>('/api/bookmarks', payload);
       set({
         isRecording: true,
         currentBookmarkId: res.id,

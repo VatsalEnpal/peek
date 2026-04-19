@@ -230,9 +230,11 @@ describe('recording store', () => {
 
 describe('RecordButton', () => {
   it('renders "rec" label when idle and POSTs to /api/bookmarks on click', async () => {
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('my label');
-    let posted = false;
-    installFetchStub({ onBookmarkPost: () => (posted = true) });
+    // L3.5: clicking the record button opens an inline label prompt first.
+    // The user edits (or accepts) the pre-filled label, then submits — only
+    // then do we POST /api/bookmarks.
+    let postedBody: Record<string, unknown> | undefined;
+    installFetchStub({ onBookmarkPost: (b) => (postedBody = b) });
 
     useSessionStore.setState({ selectedSessionId: 'sess-rec-1' });
     render(<RecordButton />);
@@ -240,15 +242,29 @@ describe('RecordButton', () => {
     const btn = screen.getByTestId('record-button');
     expect(btn.textContent).toMatch(/rec/i);
 
+    // Click opens the inline label prompt dialog.
     await act(async () => {
       fireEvent.click(btn);
     });
+    const input = await screen.findByTestId('record-label-input');
+    expect(input).toBeTruthy();
+
+    // Type a label + submit via the amber RECORD button.
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'my label' } });
+    });
+    const submit = screen.getByTestId('record-label-submit');
+    await act(async () => {
+      fireEvent.click(submit);
+    });
 
     await waitFor(() => {
-      expect(posted).toBe(true);
+      expect(postedBody).toBeDefined();
     });
+    expect(postedBody!.label).toBe('my label');
+    expect(postedBody!.source).toBe('record');
+    expect(postedBody!.sessionId).toBe('sess-rec-1');
     expect(useRecordingStore.getState().isRecording).toBe(true);
-    promptSpy.mockRestore();
   });
 
   it('shows pulsing dot + timer while recording; Stop PATCHes endTs', async () => {
@@ -339,22 +355,23 @@ describe('FocusBar', () => {
   });
 });
 
-describe('SessionPicker sub-picker', () => {
+describe('Sessions landing bookmark nesting', () => {
+  // v0.2: the landing page (L1) is where bookmarks nest under a session row.
+  // The old Mode-C SessionPicker inside the topbar no longer renders on the
+  // session-detail route — the landing page owns that disclosure now.
   it('expand arrow reveals nested bookmarks for the session', async () => {
+    window.history.pushState({}, '', '/');
     render(<App />);
-    await waitFor(() => {
-      expect(screen.getByTestId('session-picker')).toBeTruthy();
-    });
-    // Session row exists.
+    // Wait for the sessions list to mount.
     const expandBtn = await screen.findByTestId('session-expand-sess-rec-1');
     await act(async () => {
       fireEvent.click(expandBtn);
     });
     await waitFor(() => {
-      expect(screen.getByTestId('bookmark-bm-1')).toBeTruthy();
-      expect(screen.getByTestId('bookmark-bm-2')).toBeTruthy();
+      expect(screen.getByTestId('bookmark-row-bm-1')).toBeTruthy();
+      expect(screen.getByTestId('bookmark-row-bm-2')).toBeTruthy();
     });
-    const bm1 = screen.getByTestId('bookmark-bm-1');
+    const bm1 = screen.getByTestId('bookmark-row-bm-1');
     expect(bm1.textContent).toContain('initial repro');
   });
 });
