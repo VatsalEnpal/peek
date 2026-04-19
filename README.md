@@ -1,43 +1,78 @@
 # Peek
 
-**A local recorder for Claude Code sessions.** Mark an interval with `/peek_start NAME`, work normally, close it with `/peek_end` — and get back a complete, navigable log of every tool call, file read, subagent, and API request that happened inside the window. All local. Nothing leaves your laptop.
+**A recorder for Claude Code sessions.** You mark an interval. Peek captures every tool call, every subagent, every API request inside it — with inputs and outputs expandable from the UI. Nothing leaves your laptop.
 
 ---
 
-## Install (30 seconds)
+## The problem
 
-**Prerequisites:** Node.js 22 or newer (`node --version`). Claude Code installed and run at least once so `~/.claude/` exists.
+You're forty turns deep into a Claude Code session. The agent spawned the orchestrator subagent. The orchestrator fired off eighteen tool calls — some Bash, a couple of API hops, a few file reads — and decided there were "multiple repos" and went exploring. Something in there burned 40k tokens you didn't expect.
 
-```bash
-npx peek install     # installs /peek_start + /peek_end into ~/.claude/commands/
-peek                 # starts the recorder daemon at http://127.0.0.1:7335
+You press `Ctrl+O`. A wall of interleaved JSON scrolls by. The information is technically there. But it isn't navigable. You can't click a row. You can't compare two turns. You can't show it to a teammate without a screen-share and a lot of squinting.
+
+Telemetry gives totals. Logs give noise. What you actually want is the *story* of what the agent did: in order, expandable, with the exact bash command and its stdout right there.
+
+## What Peek does
+
+You type `/peek_start fixing-auth`. You work normally. You type `/peek_end`. You refresh `http://127.0.0.1:7335` and see a timeline like this:
+
+```
+22:04:04  👥  SUBAGENT  Agent: orchestrator                 18 children  ▾
+22:04:04  💬  USER_PROMPT  user_prompt                              150  ▸
+22:04:06  🤖  API_CALL     api_call                                  13  ▾
+          OUTPUTS  I'll start by exploring the working directory
+                   to find git repositories.
+22:04:07  ▸   TOOL_CALL    Bash                                       45  ▸
+22:04:09  ▸   TOOL_CALL    Bash                                       74  ▸
+22:04:11  🤖  API_CALL     api_call                                  31  ▾
+          OUTPUTS  There are multiple repos. I need to determine
+                   which one is "the current repository"…
 ```
 
-Open Claude Code, type `/peek_start my-topic`, do your thing, type `/peek_end`. Open [http://127.0.0.1:7335](http://127.0.0.1:7335) to see the recording.
+Click any row. The panel slides open with the real command string (`ls /Users/.../Code/work`), the captured stdout, and the token count. Subagents collapse into groups with accurate child counts. Lifecycle noise is hidden by default; one toggle reveals it.
 
-No config. No accounts. No network calls to anyone but your own machine.
+Peek is a screen recorder for your agents, but structured: events, not pixels. When a session goes sideways, you share the recording instead of describing what happened.
 
-## How it works
+---
 
-**Peek only shows sessions you explicitly record with `/peek_start`. Your other Claude Code activity stays invisible.**
+## Get it running
 
-That's the whole model. Peek is not a passive observatory of everything Claude Code does — it's a recorder you consciously turn on and off. If you never type `/peek_start`, the landing page stays empty no matter how much Claude Code activity happens on your machine.
+**Prerequisites:** Node.js 22 or newer, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and run at least once (so `~/.claude/` exists).
 
-### The recording lifecycle
+```bash
+git clone https://github.com/VatsalEnpal/peek-trace.git
+cd peek-trace
+npm install
+npm run build
+node dist/bin/peek.js install
+node dist/bin/peek.js serve
+```
 
-1. In any Claude Code session, type `/peek_start my-topic` — a new recording opens (status: `recording`, with a pulsing amber dot in the UI).
-2. Work normally. Every tool call, file read, grep, bash, API call, and subagent dispatched from that session streams into the recording live.
-3. Type `/peek_end` — the recording closes (status: `closed`).
+You should see:
 
-A few rules that keep this sane:
+```
+peek live on http://127.0.0.1:7335 (dataDir=~/.peek, watch=~/.claude/projects)
+```
 
-- **One recording at a time per session.** If you type `/peek_start NAME2` while a recording is already open in the same Claude Code session, Peek auto-saves the previous one (status: `auto-closed-by-new-start`) and opens the new one. Like hitting record on a camcorder while already recording — the previous file saves, a new one starts.
-- **10-minute idle auto-close.** If you quit Claude Code or the session goes idle for 10 minutes, Peek auto-closes the recording with status `auto-closed` and the end timestamp is stamped at the last event it saw.
-- **Sessions, not windows.** A recording is tied to the single Claude Code session where you typed `/peek_start`. Two sessions running in parallel in different terminals are independent; recording one does not capture the other.
+Open Claude Code. Type `/peek_start my-topic`. Do work. Type `/peek_end`. Refresh `http://127.0.0.1:7335`.
 
-### Text marker fallback
+> **Heads up — known v0.3 limitation.** The recording picks the "current" Claude Code session by watching which JSONL was most recently appended. If you have multiple CC windows writing at the same time, a recording may briefly attribute to whichever one happened to blink last. For single-session workflows (almost everyone) this is invisible. If you're dogfooding Peek while debugging Peek in a second window — you'll want to close one or wait for v0.3.1, which makes the JSONL-side marker authoritative.
 
-Don't want to install the slash commands? Type markers as plain text in your Claude Code prompt:
+---
+
+## The mental model
+
+**Only sessions you explicitly record show up.** If you never type `/peek_start`, Peek's landing page stays empty no matter how much Claude Code activity your machine sees. Peek is a recorder, not an observatory.
+
+Three rules keep it sane:
+
+- **One recording at a time per session.** A second `/peek_start` auto-saves the previous one and starts fresh — like hitting record on a camcorder while already recording.
+- **10-minute idle auto-close.** If you quit Claude Code or the session goes quiet, Peek closes the recording at the last event it saw.
+- **Recording follows the session it was started in.** Other Claude Code sessions in other terminals are invisible unless you `/peek_start` inside them too.
+
+## Text-marker fallback
+
+Haven't installed the slash commands? Type markers inside your CC prompt:
 
 ```
 @peek-start my-topic
@@ -45,55 +80,38 @@ Don't want to install the slash commands? Type markers as plain text in your Cla
 @peek-end
 ```
 
-The markers must be the **entire prompt** on their own — Peek deliberately ignores `@peek-end` if it appears inside prose so your documentation and README diffs don't accidentally start recordings.
-
-Slash commands are the preferred flow. The text fallback exists for users who haven't run `peek install`.
-
-## What a recording captures
-
-Everything you'd see if you pressed `Ctrl+O` in Claude Code during the window:
-
-- Every user prompt in that session
-- Every assistant response + token usage
-- Every tool call (`Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`, `WebFetch`, `TodoWrite`, MCP calls…) with its inputs and outputs
-- Every subagent spawned from the session — including **every tool call the subagent itself made**, rendered inline as an indented group under the subagent header
-- Every `Skill` invocation
-- Every hook fire
+The markers must be the *entire* prompt on their own. Inline usage (`"document the @peek-start flow"`) is deliberately ignored so your README diffs and your chat about Peek don't accidentally start recordings. Slash commands are the preferred flow; text markers are the fallback.
 
 ## What a recording does NOT include
 
-- Other Claude Code sessions running in other terminals you didn't `/peek_start`
-- Events in the same session that happened before `/peek_start` or after `/peek_end`
-- Claude Code lifecycle noise (`bridge_status`, `permission-mode`, `file-history-snapshot`, `turn_duration`, `auto_mode`, and their ~10 siblings) — hidden by default. A "show internal events" toggle on the detail page turns them back on.
+- Other Claude Code sessions you didn't `/peek_start`
+- Events in the same session from before `/peek_start` or after `/peek_end`
+- Claude Code lifecycle noise (`permission-mode`, `file-history-snapshot`, `turn_duration`, `last-prompt`, ~10 siblings) — hidden by default. Toggle "show internal events" on the detail page to see them.
 
 ## Privacy
 
-Peek binds to **`127.0.0.1` only**. Nothing leaves your laptop. No telemetry. No cloud. No login.
+Peek binds to `127.0.0.1` only. No telemetry. No cloud. No login. Your recordings live under `~/.peek/`. Capture-time redaction hashes `.env` values and API-key-looking tokens before writing — even your local database never sees secrets in plaintext.
 
-The daemon stores recordings and events under `~/.peek/` on your machine. Capture-time secret redaction hashes `.env` values, API keys, and credentials before writing, so even the local database never sees them in plaintext. The source files stay where they are on disk; Peek holds pointers, not copies.
+---
 
-## Commands
+## Reference
 
-| Command              | Purpose                                                                                                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `peek`               | Start the recorder (HTTP + JSONL watcher) on `http://127.0.0.1:7335`. Equivalent to `peek serve`.                                                                         |
-| `peek serve`         | Same as `peek` with explicit flags. Watcher runs by default; pass `--no-watch` to disable. `--port`, `--data-dir`, `--claude-dir` override the defaults.                  |
-| `peek install`       | Copy `/peek_start` and `/peek_end` into `~/.claude/commands/`. `--force` overwrites. `--target <dir>` installs elsewhere (for testing).                                   |
-| `peek import <path>` | One-shot import of a JSONL file or directory. Only populates the legacy `/sessions` view — recordings still require `/peek_start`.                                        |
+### Commands
 
-Environment variables:
+| Command              | Purpose                                                                                                   |
+| -------------------- | --------------------------------------------------------------------------------------------------------- |
+| `peek`               | Start the recorder (HTTP + JSONL watcher) on `http://127.0.0.1:7335`. Equivalent to `peek serve`.         |
+| `peek serve`         | Same as `peek` with explicit flags. Watcher runs by default; pass `--no-watch` to disable. `--port`, `--data-dir`, `--claude-dir` override the defaults. |
+| `peek install`       | Copy `/peek_start` and `/peek_end` into `~/.claude/commands/`. `--force` overwrites. `--target <dir>` installs elsewhere (for testing). |
+| `peek import <path>` | One-shot import of a JSONL file or directory. Only populates the legacy `/sessions` view — recordings still require `/peek_start`. |
 
-- `PEEK_PORT` — override the default port (`7335`). Honored by both `peek` and `peek serve`; the `/peek_start` / `/peek_end` slash commands also honor it so they always hit the right daemon.
-- `PEEK_DATA_DIR` — override the data directory (default `~/.peek/`). Useful for hermetic test runs or keeping recordings under a project tree.
-- `PEEK_HOST` — override `127.0.0.1`. Use `0.0.0.0` inside a container if you need LAN access (only on trusted networks).
+### Environment variables
 
-## Routes
+- `PEEK_PORT` — override the default port (`7335`). Honored by the daemon AND by the slash commands, so setting it once makes both ends match.
+- `PEEK_DATA_DIR` — override `~/.peek/`. Useful for hermetic test runs or keeping recordings under a project tree.
+- `PEEK_HOST` — override `127.0.0.1`. Use `0.0.0.0` only on trusted networks (containers, remote dev boxes).
 
-- `/` — the recordings list (what you made with `/peek_start`)
-- `/recording/:id` — the full detail view for one recording
-- `/sessions` — legacy view of every Claude Code session Peek has ever imported (useful for `peek import` users; not the default)
-
-## Keyboard shortcuts
+### Keyboard shortcuts
 
 | Key                                   | Action                                     |
 | ------------------------------------- | ------------------------------------------ |
@@ -102,24 +120,32 @@ Environment variables:
 | `j` / `k` (or `↓` / `↑`)              | Next / previous row in the timeline        |
 | `h` / `l` (or `←` / `→`)              | Collapse / expand the focused row          |
 | `Enter`                               | Open / drill into the focused row          |
-| `Cmd+Shift+R` / `Ctrl+Shift+R`        | Toggle recording (when no slash commands)  |
+| `Cmd+Shift+R` / `Ctrl+Shift+R`        | Toggle recording                           |
 
-## Troubleshooting
+### Routes
+
+- `/` — the recordings list (what you made with `/peek_start`)
+- `/recording/:id` — the full detail view for one recording
+- `/sessions` — legacy view of every imported Claude Code session (for `peek import` users)
+
+### Troubleshooting
 
 **`peek: daemon not running — start with "peek"`**
-You typed `/peek_start` but `peek` isn't running. Open another terminal and run `peek`. Leave it running while you work.
+The daemon isn't running. Open another terminal and run `peek`. Leave it running while you work.
 
 **Port 7335 already in use**
-Another process owns the port. Either stop it, or run `PEEK_PORT=7336 peek` and set the same `PEEK_PORT` in the shell where Claude Code runs so the slash commands hit the right daemon.
+Another process owns the port. Either stop it, or run `PEEK_PORT=7336 peek` — the slash commands honor the same env var so they still hit the right daemon.
 
-**`~/.claude/ not found at …`**
-`peek install` couldn't find Claude Code's config directory. Install Claude Code first (`https://claude.ai/code`), run it once, then retry `peek install`. As a fallback you can copy `skills/peek_start/SKILL.md` and `skills/peek_end/SKILL.md` to `~/.claude/commands/peek_start.md` and `peek_end.md` yourself.
+**`~/.claude/ not found`**
+`peek install` couldn't find Claude Code's config directory. Install Claude Code, run it once, then retry `peek install`. Fallback: copy `skills/peek_start/SKILL.md` and `skills/peek_end/SKILL.md` into `~/.claude/commands/peek_start.md` and `peek_end.md` yourself.
 
 **Slash commands installed but `/peek_start` does nothing**
-Restart Claude Code. It only scans `~/.claude/commands/` on startup.
+Restart Claude Code. It scans `~/.claude/commands/` only on startup.
 
 **Recording stays empty**
-Check that `peek` was running _before_ you typed `/peek_start`. If you started it after, the events already appended to the session's JSONL are lost to the recording window — a new `/peek_start` will capture everything from that point forward.
+Check that `peek` was already running *before* you typed `/peek_start`. Events that were appended to the JSONL before the start marker are out of the recording window.
+
+---
 
 ## License
 
