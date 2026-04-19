@@ -25,11 +25,18 @@ router.post('/preview', async (req: Request, res: Response) => {
   }
   try {
     const result = (await importPath(path, { preview: true })) as ImportResult;
+    // Backward-compat: keep the legacy `size` field (which was reused for
+    // `totalTokens` in early callers) AND expose the real filesystem size as
+    // `sizeBytes` + `mtime`, plus the assembled `slug` so the Import wizard
+    // can render slug-first labels just like the landing page.
     const sessions = result.sessions.map((s) => ({
       id: s.id,
       label: s.label,
+      slug: s.slug ?? null,
       size: s.totalTokens,
-      latestTs: null,
+      sizeBytes: s.sizeBytes ?? null,
+      mtime: s.mtime ?? null,
+      latestTs: s.mtime ?? null,
       turnCount: s.turnCount,
       totalTokens: s.totalTokens,
     }));

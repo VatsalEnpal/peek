@@ -46,6 +46,12 @@ export type ImportSessionSummary = {
   label: string;
   turnCount: number;
   totalTokens: number;
+  /** Human-adjective slug when the assembler produced one (e.g. "velvet-dawn-cipher"). */
+  slug?: string | null;
+  /** Source .jsonl file size, in bytes, at the time of preview. */
+  sizeBytes?: number;
+  /** Source .jsonl file last-modified ISO timestamp. */
+  mtime?: string;
 };
 
 export type DriftWarning = {
@@ -450,6 +456,18 @@ async function importSingleFile(
   const rawLines = raw.split('\n');
   const { events } = parseJsonl(raw);
 
+  // Capture filesystem metadata BEFORE any processing so the Import wizard
+  // can render size / mtime without a second stat round-trip.
+  let sizeBytes: number | undefined;
+  let mtime: string | undefined;
+  try {
+    const st = statSync(file);
+    sizeBytes = st.size;
+    mtime = new Date(st.mtimeMs).toISOString();
+  } catch {
+    /* non-fatal — summary fields stay undefined */
+  }
+
   const salt = opts.salt ?? createSessionSalt();
 
   // 1. Collect all content blocks with their source-line indices.
@@ -581,6 +599,9 @@ async function importSingleFile(
     turnCount: session.turns.length,
     totalTokens,
   };
+  if (session.slug !== undefined) summary.slug = session.slug;
+  if (sizeBytes !== undefined) summary.sizeBytes = sizeBytes;
+  if (mtime !== undefined) summary.mtime = mtime;
 
   return { session, summary, drifts, salt, rawEvents: events };
 }
