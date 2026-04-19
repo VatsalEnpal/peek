@@ -45,14 +45,19 @@ function defaultDataDir(): string {
 const LIVE_DEFAULT_PORT = 7335;
 
 function readPkgVersion(): string {
-  try {
-    const pkgPath = path.join(__dirname, '..', 'package.json');
-    const raw = readFileSync(pkgPath, 'utf8');
-    const pkg = JSON.parse(raw) as { version?: string };
-    return pkg.version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
+  const candidates = [
+    path.join(__dirname, '..', 'package.json'),
+    path.join(__dirname, '..', '..', 'package.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      const pkg = JSON.parse(readFileSync(p, 'utf8')) as { version?: string };
+      if (pkg.version) return pkg.version;
+    } catch {
+      continue;
+    }
   }
+  return '0.0.0';
 }
 
 const program = new Command();
