@@ -140,62 +140,146 @@ function filterVisible(events: TimelineEvent[], showDebug: boolean): TimelineEve
   });
 }
 
+function eventTs(e: TimelineEvent): string {
+  if (e.kind === 'span') return e.startTs ?? '';
+  return e.ts ?? '';
+}
+
 /**
- * Build a tree over the filtered event list:
- *  - childrenByParent maps span.id → events whose parentSpanId points at it
- *  - subagentDescendants maps subagent.id → every transitive descendant
- *    (for the group's "N children" counter AND for excluding them from the
- *    top-level roots so they render only inside the group) (#14)
+ * Build a tree over the filtered event list. Strategy for subagent grouping
+ * (#14) has to tolerate the real CC wire shape:
+ *
+ *  - Subagent-joiner splices child-session spans into the parent session,
+ *    but most child spans keep their original parentSpanId pointing at
+ *    another child-session span (e.g. an assistant-message span). Those
+ *    intermediate spans may not land in a given recording's event window
+ *    because of ts filtering or because subagent-joiner didn't run for
+ *    that session at all (missing child JSONL).
+ *  - Result: child tool_calls arrive with `parentSpanId` set to an id that
+ *    doesn't resolve to any span in `events` — they read as orphans.
+ *
+ * Attribution rules (walk events in ts order, maintain `currentSubagent`):
+ *
+ *  1. A subagent span itself is a top-level root and becomes the current
+ *     subagent for any subsequent orphan.
+ *  2. An event whose parentSpanId resolves to an in-events span that is
+ *     either the subagent or already attributed to the subagent → attributed
+ *     to the subagent.
+ *  3. An event whose parentSpanId is orphan (references a span not in
+ *     events) and which comes AFTER the current subagent → attributed to
+ *     the subagent.
+ *  4. An event whose parentSpanId resolves to an in-events span that is a
+ *     non-subagent root → stays top-level; resets `currentSubagent = null`
+ *     so following events aren't vacuumed into a stale group.
+ *  5. An event with undefined parentSpanId that comes BEFORE any subagent
+ *     → top-level.
+ *
+ * The order matters: events are processed chronologically so "the most
+ * recent preceding subagent" is well-defined.
  */
 function buildTree(events: TimelineEvent[]): {
   roots: TimelineEvent[];
-  childrenByParent: Map<string, TimelineEvent[]>;
   subagentDescendants: Map<string, TimelineEvent[]>;
 } {
   const byId = new Map<string, TimelineEvent>();
   for (const e of events) byId.set(e.id, e);
 
-  const childrenByParent = new Map<string, TimelineEvent[]>();
-  for (const e of events) {
-    const parent = e.kind === 'span' ? e.parentSpanId : undefined;
-    if (parent && byId.has(parent)) {
-      const arr = childrenByParent.get(parent) ?? [];
-      arr.push(e);
-      childrenByParent.set(parent, arr);
+  // Stable ts-sorted copy (don't mutate caller's array).
+  const ordered = [...events].sort((a, b) => {
+    const ta = eventTs(a);
+    const tb = eventTs(b);
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+
+  // event.id → subagent.id it's attributed to (or undefined for top-level).
+  const attribution = new Map<string, string>();
+  let currentSubagent: string | null = null;
+  // Timestamp of the most recent event attributed to currentSubagent (or the
+  // subagent itself). Used to end the subagent's scope on a large idle gap —
+  // once the subagent's tool_result lands back in the parent session the
+  // model typically thinks for a few seconds before the next user turn, so
+  // any gap >GAP_MS between attributed events terminates the group.
+  //
+  // In tester's tick-6 fixture the subagent's last child was at 16:25:13 and
+  // the post-subagent user_prompt arrived at 16:25:23 (10s gap). 5s separates
+  // the two cases cleanly without misclassifying slow tool results inside
+  // the subagent (CC tool calls typically complete in <2s each).
+  const GAP_MS = 5_000;
+  let lastAttributedTs: string | null = null;
+
+  for (const e of ordered) {
+    const ts = eventTs(e);
+
+    // Rule 1: subagent itself is top-level and starts a new group.
+    if (e.kind === 'span' && e.type === 'subagent') {
+      currentSubagent = e.id;
+      lastAttributedTs = ts;
+      continue;
     }
+
+    // Gap check — close the open subagent group if there's been a long
+    // silence since the last attributed event.
+    if (currentSubagent !== null && lastAttributedTs !== null && ts !== '') {
+      const a = Date.parse(lastAttributedTs);
+      const b = Date.parse(ts);
+      if (Number.isFinite(a) && Number.isFinite(b) && b - a > GAP_MS) {
+        currentSubagent = null;
+        lastAttributedTs = null;
+      }
+    }
+
+    const parentId = e.kind === 'span' ? e.parentSpanId : undefined;
+
+    if (parentId && byId.has(parentId)) {
+      const parent = byId.get(parentId) as TimelineEvent;
+      // Rule 2a: parent IS the currently-active subagent → attribute.
+      if (parent.kind === 'span' && parent.type === 'subagent' && currentSubagent === parent.id) {
+        attribution.set(e.id, parent.id);
+        if (ts !== '') lastAttributedTs = ts;
+        continue;
+      }
+      // Rule 2b: parent is already attributed to the currently-active
+      // subagent → chain the attribution. We require `currentSubagent` to
+      // still match so a stale attribution (e.g. from before a gap reset)
+      // can't vacuum new events into a closed group — the common case is
+      // the first post-subagent user_prompt whose parentUuid is the last
+      // in-subagent assistant api_call.
+      const parentAttrib = attribution.get(parent.id);
+      if (parentAttrib && parentAttrib === currentSubagent) {
+        attribution.set(e.id, parentAttrib);
+        if (ts !== '') lastAttributedTs = ts;
+        continue;
+      }
+      // Rule 4: parent resolves to a non-subagent root OR to a stale
+      // subagent. Either way we've left the active group — reset and let
+      // this event fall to the top level.
+      currentSubagent = null;
+      lastAttributedTs = null;
+      continue;
+    }
+
+    // parentId is undefined OR points to an orphan (not in events).
+    if (currentSubagent !== null) {
+      // Rule 3: orphan after a subagent → attribute to currentSubagent.
+      attribution.set(e.id, currentSubagent);
+      if (ts !== '') lastAttributedTs = ts;
+    }
+    // else Rule 5: top-level (nothing to do).
   }
 
+  // Materialise maps for the renderer.
   const subagentDescendants = new Map<string, TimelineEvent[]>();
-  const descendantOfSubagent = new Set<string>();
-  for (const e of events) {
-    if (!(e.kind === 'span' && e.type === 'subagent')) continue;
-    const descendants: TimelineEvent[] = [];
-    const queue: TimelineEvent[] = [...(childrenByParent.get(e.id) ?? [])];
-    // The subagent-joiner also stamps `childSpanIds` on the parent — seed the
-    // queue from that metadata so grouping survives even if the stitched
-    // children carry a different `parentSpanId` (depth-1 nested tool_uses
-    // whose assembler-assigned parent is the child session's assistant
-    // message, not the parent subagent span itself).
-    const declared = Array.isArray(e.childSpanIds) ? e.childSpanIds : [];
-    for (const childId of declared) {
-      const child = byId.get(childId);
-      if (child) queue.push(child);
-    }
-    const seen = new Set<string>();
-    while (queue.length > 0) {
-      const d = queue.shift() as TimelineEvent;
-      if (seen.has(d.id)) continue;
-      seen.add(d.id);
-      descendants.push(d);
-      const kids = childrenByParent.get(d.id) ?? [];
-      for (const k of kids) queue.push(k);
-    }
-    subagentDescendants.set(e.id, descendants);
-    for (const d of descendants) descendantOfSubagent.add(d.id);
+  for (const e of ordered) {
+    const sub = attribution.get(e.id);
+    if (!sub) continue;
+    const arr = subagentDescendants.get(sub) ?? [];
+    arr.push(e);
+    subagentDescendants.set(sub, arr);
   }
 
-  const roots = events.filter((e) => !descendantOfSubagent.has(e.id));
-  return { roots, childrenByParent, subagentDescendants };
+  const roots = ordered.filter((e) => !attribution.has(e.id));
+  return { roots, subagentDescendants };
 }
 
 export function RecordingDetailPage(): ReactElement {

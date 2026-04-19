@@ -244,25 +244,53 @@ describe('RecordingDetailPage — #13 top-level tool_call classification', () =>
 // ---------------------------------------------------------------------------
 
 describe('RecordingDetailPage — #14 subagent grouping', () => {
+  // Mirrors the shape of a real CC recording (tester fixture tick-6):
+  // the subagent's child spans carry `parentSpanId` values that reference
+  // spans which live OUTSIDE the event window (child-session assistant
+  // message uuids not spliced in, or spliced in and then filtered by the
+  // recording's ts range). That makes them appear as orphans. The fix
+  // must attribute them to the most-recent preceding subagent.
   const EVENTS: Ev[] = [
+    // Pre-subagent top-level event — must NOT be attributed to the
+    // subagent (it happened before).
+    {
+      kind: 'span',
+      id: 'pre-user',
+      sessionId: 'sess-R',
+      type: 'user_prompt',
+      startTs: '2026-04-19T18:25:02.000Z',
+      parentSpanId: 'orphan-before',
+    },
     {
       kind: 'span',
       id: 'span-subagent',
       sessionId: 'sess-R',
       type: 'subagent',
       name: 'Agent: security',
-      startTs: '2026-04-19T18:25:10.000Z',
+      startTs: '2026-04-19T18:25:06.000Z',
+      parentSpanId: 'orphan-A',
       metadata: { agentId: 'agent-xyz', agentDescription: 'scan the repo' },
-      childSpanIds: ['child-bash', 'child-read', 'child-grep'],
     },
+    // Orphan child: parentSpanId references a span not present in events
+    // (child session assistant message 80556fba). Must be attributed to
+    // the preceding subagent by the orphan-after-subagent heuristic.
     {
       kind: 'span',
       id: 'child-bash',
       sessionId: 'sess-R',
       type: 'tool_call',
       name: 'Bash',
-      startTs: '2026-04-19T18:25:11.000Z',
-      parentSpanId: 'span-subagent',
+      startTs: '2026-04-19T18:25:08.000Z',
+      parentSpanId: 'orphan-assistant-1',
+    },
+    {
+      kind: 'span',
+      id: 'child-grep',
+      sessionId: 'sess-R',
+      type: 'tool_call',
+      name: 'Grep',
+      startTs: '2026-04-19T18:25:09.000Z',
+      parentSpanId: 'orphan-assistant-2',
     },
     {
       kind: 'span',
@@ -270,21 +298,27 @@ describe('RecordingDetailPage — #14 subagent grouping', () => {
       sessionId: 'sess-R',
       type: 'tool_call',
       name: 'Read',
-      startTs: '2026-04-19T18:25:12.000Z',
-      parentSpanId: 'span-subagent',
+      startTs: '2026-04-19T18:25:09.500Z',
+      parentSpanId: 'orphan-assistant-2',
+    },
+    // Post-subagent top-level event — parent points to an in-events span
+    // that itself resolves to a top-level (not the subagent). Must stay
+    // at the top level.
+    {
+      kind: 'span',
+      id: 'post-api',
+      sessionId: 'sess-R',
+      type: 'api_call',
+      startTs: '2026-04-19T18:25:23.000Z',
+      parentSpanId: 'post-user',
     },
     {
-      // A grandchild — its parentSpanId points at child-read, which is NOT
-      // the subagent span. The subagent's count should still reflect 3
-      // transitive tool calls (bash, read, grep) since the nested one is
-      // still a descendant.
       kind: 'span',
-      id: 'child-grep',
+      id: 'post-user',
       sessionId: 'sess-R',
-      type: 'tool_call',
-      name: 'Grep',
-      startTs: '2026-04-19T18:25:13.000Z',
-      parentSpanId: 'child-read',
+      type: 'user_prompt',
+      startTs: '2026-04-19T18:25:22.000Z',
+      parentSpanId: 'orphan-tail',
     },
   ];
 
@@ -295,7 +329,7 @@ describe('RecordingDetailPage — #14 subagent grouping', () => {
   it('subagent group reports the correct descendant count', async () => {
     await renderPage();
     const group = screen.getByTestId('subagent-group-span-subagent');
-    // Count reads "3 children" (or similar phrasing with 3), not "0 children".
+    // 3 orphan tool_calls between subagent and next top-level event.
     expect(group.textContent).toMatch(/3 children/);
     expect(group.textContent).not.toMatch(/0 children/);
   });
@@ -313,12 +347,10 @@ describe('RecordingDetailPage — #14 subagent grouping', () => {
     await renderPage();
     const group = screen.getByTestId('subagent-group-span-subagent');
     const button = within(group).getByTestId('subagent-group-toggle-span-subagent');
-    // Default: open, children visible.
     expect(within(group).queryByTestId('tool-row-child-bash')).toBeTruthy();
     act(() => {
       fireEvent.click(button);
     });
-    // After click: children hidden.
     expect(within(group).queryByTestId('tool-row-child-bash')).toBeNull();
   });
 
@@ -327,11 +359,27 @@ describe('RecordingDetailPage — #14 subagent grouping', () => {
     const timeline = screen.getByTestId('recording-timeline');
     const topLevelRows = timeline.querySelectorAll(':scope > [data-testid^="tool-row-"]');
     const ids = Array.from(topLevelRows).map((e) => e.getAttribute('data-testid'));
-    // At top level we should see ONLY the subagent group (not a ToolRow) or
-    // other non-subagent top-level events. None of the child rows should
-    // appear as direct children of the timeline.
     expect(ids).not.toContain('tool-row-child-bash');
     expect(ids).not.toContain('tool-row-child-read');
     expect(ids).not.toContain('tool-row-child-grep');
+  });
+
+  it('events that precede the subagent stay at the top level', async () => {
+    await renderPage();
+    const timeline = screen.getByTestId('recording-timeline');
+    const topLevelRows = timeline.querySelectorAll(':scope > [data-testid^="tool-row-"]');
+    const ids = Array.from(topLevelRows).map((e) => e.getAttribute('data-testid'));
+    expect(ids).toContain('tool-row-pre-user');
+  });
+
+  it('events whose ancestor chain resolves to a non-subagent root stay at the top level', async () => {
+    await renderPage();
+    const timeline = screen.getByTestId('recording-timeline');
+    const topLevelRows = timeline.querySelectorAll(':scope > [data-testid^="tool-row-"]');
+    const ids = Array.from(topLevelRows).map((e) => e.getAttribute('data-testid'));
+    // post-api has parent post-user (in events) whose parent is orphan-tail
+    // AFTER the subagent window ended — they resolve to a non-subagent root.
+    expect(ids).toContain('tool-row-post-api');
+    expect(ids).toContain('tool-row-post-user');
   });
 });
