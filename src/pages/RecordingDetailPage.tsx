@@ -39,12 +39,19 @@ type SpanEvent = {
   inputs?: unknown;
   outputs?: unknown;
   metadata?: Record<string, unknown>;
+  childSpanIds?: string[];
 };
 type LedgerEvent = {
   kind: 'ledger';
   id: string;
   sessionId: string;
   source?: string;
+  /**
+   * v0.3-resume #12: when the server returns both a span AND the ledger entry
+   * that introduced it, dedupe by dropping the ledger row whose
+   * `introducedBySpanId` resolves to a span in the same payload.
+   */
+  introducedBySpanId?: string;
   tokens?: number;
   contentRedacted?: string;
   ts?: string;
@@ -106,23 +113,89 @@ function describeTarget(e: SpanEvent): string {
   return e.type;
 }
 
-function flatten(events: TimelineEvent[]): {
+/**
+ * v0.3-resume:
+ *  1. Drop ledger rows whose `introducedBySpanId` resolves to a rendered
+ *     span — eliminates the `LEDGER tool_use` / `TOOL_CALL Bash` duplicate
+ *     pair (#12).
+ *  2. In default view (showDebug=false) drop the remaining ledger rows,
+ *     spans whose `type` is in LIFECYCLE_TYPES, and catch-all `type:'unknown'`
+ *     spans — the "show internal events" toggle reveals all three (#11).
+ */
+function filterVisible(events: TimelineEvent[], showDebug: boolean): TimelineEvent[] {
+  const spanIds = new Set<string>();
+  for (const e of events) if (e.kind === 'span') spanIds.add(e.id);
+  return events.filter((e) => {
+    if (e.kind === 'ledger') {
+      if (e.introducedBySpanId && spanIds.has(e.introducedBySpanId)) return false;
+      if (!showDebug) return false;
+      return true;
+    }
+    // span
+    if (!showDebug) {
+      if (LIFECYCLE_TYPES.has(e.type)) return false;
+      if (e.type === 'unknown') return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Build a tree over the filtered event list:
+ *  - childrenByParent maps span.id → events whose parentSpanId points at it
+ *  - subagentDescendants maps subagent.id → every transitive descendant
+ *    (for the group's "N children" counter AND for excluding them from the
+ *    top-level roots so they render only inside the group) (#14)
+ */
+function buildTree(events: TimelineEvent[]): {
   roots: TimelineEvent[];
   childrenByParent: Map<string, TimelineEvent[]>;
+  subagentDescendants: Map<string, TimelineEvent[]>;
 } {
+  const byId = new Map<string, TimelineEvent>();
+  for (const e of events) byId.set(e.id, e);
+
   const childrenByParent = new Map<string, TimelineEvent[]>();
-  const roots: TimelineEvent[] = [];
   for (const e of events) {
     const parent = e.kind === 'span' ? e.parentSpanId : undefined;
-    if (parent && events.some((x) => x.id === parent)) {
+    if (parent && byId.has(parent)) {
       const arr = childrenByParent.get(parent) ?? [];
       arr.push(e);
       childrenByParent.set(parent, arr);
-    } else {
-      roots.push(e);
     }
   }
-  return { roots, childrenByParent };
+
+  const subagentDescendants = new Map<string, TimelineEvent[]>();
+  const descendantOfSubagent = new Set<string>();
+  for (const e of events) {
+    if (!(e.kind === 'span' && e.type === 'subagent')) continue;
+    const descendants: TimelineEvent[] = [];
+    const queue: TimelineEvent[] = [...(childrenByParent.get(e.id) ?? [])];
+    // The subagent-joiner also stamps `childSpanIds` on the parent — seed the
+    // queue from that metadata so grouping survives even if the stitched
+    // children carry a different `parentSpanId` (depth-1 nested tool_uses
+    // whose assembler-assigned parent is the child session's assistant
+    // message, not the parent subagent span itself).
+    const declared = Array.isArray(e.childSpanIds) ? e.childSpanIds : [];
+    for (const childId of declared) {
+      const child = byId.get(childId);
+      if (child) queue.push(child);
+    }
+    const seen = new Set<string>();
+    while (queue.length > 0) {
+      const d = queue.shift() as TimelineEvent;
+      if (seen.has(d.id)) continue;
+      seen.add(d.id);
+      descendants.push(d);
+      const kids = childrenByParent.get(d.id) ?? [];
+      for (const k of kids) queue.push(k);
+    }
+    subagentDescendants.set(e.id, descendants);
+    for (const d of descendants) descendantOfSubagent.add(d.id);
+  }
+
+  const roots = events.filter((e) => !descendantOfSubagent.has(e.id));
+  return { roots, childrenByParent, subagentDescendants };
 }
 
 export function RecordingDetailPage(): ReactElement {
@@ -136,10 +209,14 @@ export function RecordingDetailPage(): ReactElement {
     let cancelled = false;
     (async () => {
       try {
+        // Always request the full event set (includeLifecycle=1). Filtering
+        // now happens client-side in `filterVisible` so the toggle can flip
+        // in <16ms without a round-trip. The server-side filter would miss
+        // LEDGER rows and `type:'unknown'` spans anyway — v0.3-resume #11.
         const [sum, ev] = await Promise.all([
           apiGet<RecordingSummary>(`/api/recordings/${encodeURIComponent(id)}`),
           apiGet<TimelineEvent[]>(
-            `/api/recordings/${encodeURIComponent(id)}/events${showLifecycle ? '?includeLifecycle=1' : ''}`
+            `/api/recordings/${encodeURIComponent(id)}/events?includeLifecycle=1`
           ),
         ]);
         if (!cancelled) {
@@ -156,9 +233,13 @@ export function RecordingDetailPage(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [id, showLifecycle]);
+  }, [id]);
 
-  const tree = useMemo(() => flatten(events), [events]);
+  const visibleEvents = useMemo(
+    () => filterVisible(events, showLifecycle),
+    [events, showLifecycle]
+  );
+  const tree = useMemo(() => buildTree(visibleEvents), [visibleEvents]);
 
   return (
     <div
@@ -260,9 +341,25 @@ export function RecordingDetailPage(): ReactElement {
           >
             no events captured in this window
           </div>
+        ) : tree.roots.length === 0 ? (
+          <div
+            style={{
+              padding: 48,
+              color: 'var(--peek-fg-faint)',
+              fontSize: 'var(--peek-fs-sm)',
+              textAlign: 'center',
+            }}
+          >
+            only internal events in this window — toggle "show internal events" to see them
+          </div>
         ) : (
           tree.roots.map((e) => (
-            <EventRow key={e.id} event={e} childrenMap={tree.childrenByParent} indent={0} />
+            <EventRow
+              key={e.id}
+              event={e}
+              subagentDescendants={tree.subagentDescendants}
+              indent={0}
+            />
           ))
         )}
       </div>
@@ -333,15 +430,21 @@ function Divider(): ReactElement {
 
 function EventRow({
   event,
-  childrenMap,
+  subagentDescendants,
   indent,
 }: {
   event: TimelineEvent;
-  childrenMap: Map<string, TimelineEvent[]>;
+  subagentDescendants: Map<string, TimelineEvent[]>;
   indent: number;
 }): ReactElement {
   if (event.kind === 'span' && event.type === 'subagent') {
-    return <SubagentGroup event={event} childrenMap={childrenMap} indent={indent} />;
+    return (
+      <SubagentGroup
+        event={event}
+        descendants={subagentDescendants.get(event.id) ?? []}
+        indent={indent}
+      />
+    );
   }
   if (event.kind === 'span' && LIFECYCLE_TYPES.has(event.type)) {
     return <ToolRow event={event} indent={indent} lifecycle />;
@@ -351,15 +454,19 @@ function EventRow({
 
 function SubagentGroup({
   event,
-  childrenMap,
+  descendants,
   indent,
 }: {
   event: SpanEvent;
-  childrenMap: Map<string, TimelineEvent[]>;
+  descendants: TimelineEvent[];
   indent: number;
 }): ReactElement {
   const [open, setOpen] = useState<boolean>(true);
-  const kids = childrenMap.get(event.id) ?? [];
+  // v0.3-resume #14: the subagent group's "N children" counter and nested
+  // rows use the transitive descendant list — a subagent with 3 tool calls
+  // (even when some are grandchildren via the assembler's message-uuid
+  // parentage) reports "3 children".
+  const kids = descendants;
   const meta = (event.metadata ?? {}) as Record<string, unknown>;
   const agentId = typeof meta.agentId === 'string' ? meta.agentId : '';
   const description = typeof meta.description === 'string' ? meta.description : '';
@@ -377,6 +484,9 @@ function SubagentGroup({
     >
       <button
         type="button"
+        data-testid={`subagent-group-toggle-${event.id}`}
+        aria-expanded={open}
+        aria-label={open ? 'collapse subagent' : 'expand subagent'}
         onClick={(): void => setOpen((o) => !o)}
         style={{
           display: 'flex',
@@ -446,11 +556,15 @@ function SubagentGroup({
           {kids.length} {kids.length === 1 ? 'child' : 'children'}
         </span>
       </button>
-      {open && (
+      {open && kids.length > 0 && (
         <div style={{ marginTop: 6 }}>
-          {kids.map((k) => (
-            <EventRow key={k.id} event={k} childrenMap={childrenMap} indent={indent + 1} />
-          ))}
+          {kids.map((k) =>
+            k.kind === 'span' && LIFECYCLE_TYPES.has(k.type) ? (
+              <ToolRow key={k.id} event={k} indent={indent + 1} lifecycle />
+            ) : (
+              <ToolRow key={k.id} event={k} indent={indent + 1} />
+            )
+          )}
         </div>
       )}
     </div>
@@ -502,11 +616,10 @@ function ToolRow({
               color: 'var(--peek-fg-faint)',
               fontSize: 10,
               letterSpacing: '0.06em',
-              textTransform: 'uppercase',
               marginRight: 8,
             }}
           >
-            {kind}
+            {kind.toUpperCase()}
           </span>
           <span style={{ color: 'var(--peek-fg)', fontWeight: 500 }}>{label}</span>
         </span>
