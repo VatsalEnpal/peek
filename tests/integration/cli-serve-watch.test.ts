@@ -69,21 +69,16 @@ function awaitFirstLine(
 }
 
 describe('peek CLI — serve + watch wiring (L1.4)', () => {
-  test('peek serve --watch prints "serving ... watch=<dir>" banner', async () => {
+  test('peek serve prints "serving ... watch=<dir>" banner (watch on by default)', async () => {
+    // v0.3 audit: `--watch` used to be opt-in. Watcher now runs by default
+    // (see tests/integration/cli-launch-defaults.test.ts). This test drops
+    // the explicit `--watch` flag to reflect the new default. The escape
+    // hatch `--no-watch` is covered in cli-launch-defaults.
     const dataDir = mkdtempSync(join(tmpdir(), 'peek-cli-sw-data-'));
     const claudeDir = mkdtempSync(join(tmpdir(), 'peek-cli-sw-claude-'));
     try {
       const line = await awaitFirstLine(
-        [
-          'serve',
-          '--port',
-          '0',
-          '--data-dir',
-          dataDir,
-          '--watch',
-          '--claude-dir',
-          claudeDir,
-        ],
+        ['serve', '--port', '0', '--data-dir', dataDir, '--claude-dir', claudeDir],
         {}
       );
       expect(line).toMatch(/peek live on http:\/\/127\.0\.0\.1:\d+/);

@@ -38,11 +38,13 @@ function defaultDataDir(): string {
 }
 
 /**
- * Live-mode default port. v0.2.0 used 7334 for `peek serve`; v0.2.1 adds a
- * bare `peek` entry point on 7335 that co-hosts the watcher. `$PEEK_PORT`
- * wins over both when set.
+ * Single canonical default port. Both the bare `peek` entry point AND `peek
+ * serve` bind 7335 by default, matching the `/peek_start` / `/peek_end` slash
+ * command defaults. v0.2.0 used 7334 for `serve` and 7335 for bare `peek` —
+ * that split caused "daemon not running" errors for first-time users. v0.3
+ * unifies on 7335 everywhere. `$PEEK_PORT` still wins when set.
  */
-const LIVE_DEFAULT_PORT = 7335;
+const DEFAULT_PORT = 7335;
 
 /**
  * Default bind host is loopback. README promises "nothing leaves your laptop";
@@ -85,25 +87,37 @@ program
 
 program
   .command('serve')
-  .description('Start the Peek HTTP server')
-  .option('-p, --port <port>', 'port to listen on', '7334')
-  .option('-d, --data-dir <dir>', 'data directory', defaultDataDir())
-  .option('--watch', 'also run the JSONL file watcher alongside the server', false)
-  .option('--claude-dir <dir>', 'directory watched when --watch is set', defaultClaudeDir())
+  .description(
+    'Start the Peek HTTP server (watches ~/.claude/projects/ by default; --no-watch to disable)'
+  )
+  .option(
+    '-p, --port <port>',
+    'port to listen on (env: PEEK_PORT)',
+    process.env.PEEK_PORT ?? String(DEFAULT_PORT)
+  )
+  .option(
+    '-d, --data-dir <dir>',
+    'data directory (env: PEEK_DATA_DIR)',
+    process.env.PEEK_DATA_DIR ?? defaultDataDir()
+  )
+  .option('--no-watch', 'disable the JSONL file watcher (enabled by default)')
+  .option('--claude-dir <dir>', 'directory watched by the file watcher', defaultClaudeDir())
   .action(
     async (opts: { port: string; dataDir: string; watch: boolean; claudeDir: string }) => {
       const port = parseInt(opts.port, 10);
       const host = resolveHost();
+      // Commander maps `--no-watch` to `opts.watch === false`; absence defaults true.
+      const watch = opts.watch !== false;
       const handle = await startServe({
         dataDir: opts.dataDir,
         port,
         host,
-        watch: !!opts.watch,
+        watch,
         claudeDir: opts.claudeDir,
       });
       // eslint-disable-next-line no-console
       console.log(
-        `peek live on http://${handle.host}:${handle.port} (dataDir=${opts.dataDir}${opts.watch ? `, watch=${opts.claudeDir}` : ''})${
+        `peek live on http://${handle.host}:${handle.port} (dataDir=${opts.dataDir}${watch ? `, watch=${opts.claudeDir}` : ''})${
           handle.host === DEFAULT_BIND_HOST
             ? ''
             : ' — NOTE: binding non-loopback host, API is reachable from the network'
@@ -304,7 +318,7 @@ program
       }
 
       // Daemon reachability probe (non-fatal).
-      const port = Number(process.env.PEEK_PORT ?? LIVE_DEFAULT_PORT);
+      const port = Number(process.env.PEEK_PORT ?? DEFAULT_PORT);
       const reachable = await probeDaemon(`http://127.0.0.1:${port}`);
       if (!reachable) {
         // eslint-disable-next-line no-console
@@ -331,9 +345,9 @@ const isBare =
   (!argsAfterNode[0].startsWith('-') && !KNOWN_COMMANDS.has(argsAfterNode[0]));
 
 if (isBare && argsAfterNode.length === 0) {
-  const dataDir = defaultDataDir();
+  const dataDir = process.env.PEEK_DATA_DIR ?? defaultDataDir();
   const claudeDir = defaultClaudeDir();
-  const port = Number(process.env.PEEK_PORT ?? LIVE_DEFAULT_PORT);
+  const port = Number(process.env.PEEK_PORT ?? DEFAULT_PORT);
 
   void (async (): Promise<void> => {
     try {
