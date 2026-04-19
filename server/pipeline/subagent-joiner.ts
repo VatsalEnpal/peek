@@ -170,7 +170,15 @@ export type JoinOutcome = {
  */
 export function joinSubagentsIntoSession(opts: JoinOpts): JoinOutcome {
   const { session, events, claudeProjectsDir, assemble } = opts;
-  const warn = opts.onWarn ?? ((m: string) => console.warn(`[peek-trace] ${m}`));
+  // Only emit warnings when PEEK_DEBUG is set. Real Claude Code sessions
+  // routinely contain tool_use IDs that predate queued_command attachments
+  // (older sessions, tool calls from before this schema) — those are not
+  // user-actionable errors and flood the CLI on startup.
+  const warn =
+    opts.onWarn ??
+    ((m: string) => {
+      if (process.env.PEEK_DEBUG) console.warn(`[peek-trace] ${m}`);
+    });
   const joinedAgentIds: string[] = [];
 
   // Snapshot the initial subagent spans — splicing mutates session.spans so we

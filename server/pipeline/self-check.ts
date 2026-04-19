@@ -135,7 +135,13 @@ export function reconcileTurnTokens(
     turn.reconciliation = reconciliation;
     results.push({ turnId: turn.id, ...reconciliation });
 
-    if (!match) {
+    // Drift is expected on real Claude Code sessions because spans only carry
+    // tool-content tokens (a few dozen per call) while Turn.usage includes
+    // system prompt + cached context + history + assistant output. The UI
+    // gauge reads Turn.usage directly (L2.4-critical fix) so this is an
+    // internal-consistency signal, not a user-facing error. Gate behind
+    // PEEK_DEBUG so the CLI stays quiet by default.
+    if (!match && process.env.PEEK_DEBUG) {
       const driftPct = drift === Infinity ? 'Infinity' : (drift * 100).toFixed(2);
       const thresholdPct = (threshold * 100).toFixed(2);
       // eslint-disable-next-line no-console
