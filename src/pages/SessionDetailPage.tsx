@@ -210,7 +210,12 @@ export function SessionDetailPage(): ReactElement {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        minHeight: '100vh',
+        // L16: `minHeight: 100vh` lets the container grow with content, which
+        // defeats Timeline's inner `overflow: auto` and leaves the page
+        // unscrollable. Pin to viewport height so Timeline gets a bounded
+        // flex region. `100dvh` respects dynamic mobile toolbars.
+        height: '100dvh',
+        overflow: 'hidden',
         background: 'var(--peek-bg)',
         color: 'var(--peek-fg)',
       }}
