@@ -5,9 +5,10 @@ import type { ReactElement } from 'react';
  * devtools leak). A subscribe/notify fragment re-renders only this component.
  */
 
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 
 import { apiPost } from '../lib/api';
+import { useSelectionStore } from '../stores/selection';
 
 type Props = {
   ledgerEntryId: string;
@@ -29,6 +30,19 @@ export function UnmaskButton({ ledgerEntryId, redacted }: Props): ReactElement {
   const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const drawerOpen = useSelectionStore((s) => s.drawerOpen);
+
+  // BUG-6: the inspector drawer is a CSS slide, not an unmount. Without this
+  // reset, closing + reopening the same span would redisplay the previously
+  // unmasked plaintext without any user gesture.
+  useEffect(() => {
+    if (!drawerOpen) {
+      plaintextRef.current = null;
+      setRevealed(false);
+      setLoading(false);
+      setErr(null);
+    }
+  }, [drawerOpen]);
 
   const onClick = useCallback(async (): Promise<void> => {
     if (revealed) {
