@@ -38,7 +38,17 @@ const LOCALHOST_ORIGIN = /^http:\/\/localhost(:\d+)?$/;
 export type CreateServerOpts = {
   dataDir: string;
   port?: number;
+  host?: string;
 };
+
+/**
+ * Default bind host is 127.0.0.1 — the README promises "nothing leaves your
+ * laptop" and `app.listen(port)` without a host defaults to `::` (IPv6
+ * wildcard, dual-stack) which exposes the API to the LAN. The `PEEK_HOST`
+ * env var is the escape hatch for power users who want to bind all
+ * interfaces (e.g. `PEEK_HOST=0.0.0.0` inside a container).
+ */
+export const DEFAULT_BIND_HOST = '127.0.0.1';
 
 export type ServerHandle = {
   app: Express;
@@ -104,8 +114,9 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
     app,
     async listen() {
       const port = opts.port ?? 7334;
+      const host = opts.host ?? DEFAULT_BIND_HOST;
       server = await new Promise<http.Server>((resolve, reject) => {
-        const s = app.listen(port, () => resolve(s));
+        const s = app.listen(port, host, () => resolve(s));
         s.once('error', (err: NodeJS.ErrnoException) => {
           if (err.code === 'EADDRINUSE') {
             reject(
@@ -142,18 +153,31 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
  * `$HOME/.peek`, binds SIGTERM/SIGINT for graceful shutdown, and logs the
  * listener URL to stdout.
  */
-export async function startServer(opts: { port?: number; dataDir?: string } = {}): Promise<void> {
+export async function startServer(
+  opts: { port?: number; dataDir?: string; host?: string } = {},
+): Promise<void> {
   const dataDir =
     opts.dataDir ?? process.env.PEEK_DATA_DIR ?? join(process.env.HOME ?? '/tmp', '.peek');
   const port = opts.port ?? Number(process.env.PEEK_PORT ?? 7334);
+  const host = opts.host ?? process.env.PEEK_HOST ?? DEFAULT_BIND_HOST;
 
-  const handle = createServer({ dataDir, port });
+  const handle = createServer({ dataDir, port, host });
   const server = await handle.listen();
   const addr = server.address();
   const boundPort = typeof addr === 'object' && addr !== null ? addr.port : port;
+  const boundHost =
+    typeof addr === 'object' && addr !== null && typeof addr.address === 'string'
+      ? addr.address
+      : host;
 
   // eslint-disable-next-line no-console
-  console.log(`peek listening on http://localhost:${boundPort} (dataDir=${dataDir})`);
+  console.log(
+    `peek live on http://${boundHost}:${boundPort} (dataDir=${dataDir})${
+      boundHost === DEFAULT_BIND_HOST
+        ? ''
+        : ' — NOTE: binding non-loopback host, API is reachable from the network'
+    }`,
+  );
 
   const shutdown = async (): Promise<void> => {
     // eslint-disable-next-line no-console

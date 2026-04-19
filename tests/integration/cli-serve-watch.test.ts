@@ -86,7 +86,7 @@ describe('peek CLI — serve + watch wiring (L1.4)', () => {
         ],
         {}
       );
-      expect(line).toMatch(/peek serving on http:\/\/localhost:\d+/);
+      expect(line).toMatch(/peek live on http:\/\/127\.0\.0\.1:\d+/);
       expect(line).toContain(`watch=${claudeDir}`);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -103,7 +103,7 @@ describe('peek CLI — serve + watch wiring (L1.4)', () => {
         HOME: fakeHome,
         PEEK_PORT: '0',
       });
-      expect(line).toMatch(/peek live on http:\/\/localhost:\d+/);
+      expect(line).toMatch(/peek live on http:\/\/127\.0\.0\.1:\d+/);
       expect(line).toContain(`watch=${join(fakeHome, '.claude', 'projects')}`);
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });

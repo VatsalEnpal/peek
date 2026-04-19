@@ -25,10 +25,13 @@ export type StartServeOpts = {
   watch: boolean;
   /** Defaults to `~/.claude/projects` when omitted. */
   claudeDir?: string;
+  /** Defaults to 127.0.0.1 — see server/index.ts::DEFAULT_BIND_HOST. */
+  host?: string;
 };
 
 export type ServeHandle = {
   port: number;
+  host: string;
   stop: () => Promise<void>;
 };
 
@@ -37,11 +40,15 @@ export function defaultClaudeDir(): string {
 }
 
 export async function startServe(opts: StartServeOpts): Promise<ServeHandle> {
-  const handle = createServer({ dataDir: opts.dataDir, port: opts.port });
+  const handle = createServer({ dataDir: opts.dataDir, port: opts.port, host: opts.host });
   const server = await handle.listen();
   const addr = server.address();
   const boundPort =
     typeof addr === 'object' && addr !== null && 'port' in addr ? (addr as { port: number }).port : opts.port;
+  const boundHost =
+    typeof addr === 'object' && addr !== null && 'address' in addr
+      ? (addr as { address: string }).address
+      : (opts.host ?? '127.0.0.1');
 
   let watcher: Watcher | null = null;
   if (opts.watch) {
@@ -51,6 +58,7 @@ export async function startServe(opts: StartServeOpts): Promise<ServeHandle> {
 
   return {
     port: boundPort,
+    host: boundHost,
     async stop() {
       if (watcher) {
         await watcher.stop();

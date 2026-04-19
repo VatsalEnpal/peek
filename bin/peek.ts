@@ -44,6 +44,18 @@ function defaultDataDir(): string {
  */
 const LIVE_DEFAULT_PORT = 7335;
 
+/**
+ * Default bind host is loopback. README promises "nothing leaves your laptop";
+ * historically Node's `app.listen(port)` without a host binds `::` (dual-stack
+ * wildcard), exposing the API to the LAN. Users who genuinely need network
+ * reachability (containers, remote dev boxes) opt in via `PEEK_HOST=0.0.0.0`.
+ */
+const DEFAULT_BIND_HOST = '127.0.0.1';
+
+function resolveHost(): string {
+  return process.env.PEEK_HOST ?? DEFAULT_BIND_HOST;
+}
+
 function readPkgVersion(): string {
   const candidates = [
     path.join(__dirname, '..', 'package.json'),
@@ -81,15 +93,21 @@ program
   .action(
     async (opts: { port: string; dataDir: string; watch: boolean; claudeDir: string }) => {
       const port = parseInt(opts.port, 10);
+      const host = resolveHost();
       const handle = await startServe({
         dataDir: opts.dataDir,
         port,
+        host,
         watch: !!opts.watch,
         claudeDir: opts.claudeDir,
       });
       // eslint-disable-next-line no-console
       console.log(
-        `peek serving on http://localhost:${handle.port} (dataDir=${opts.dataDir}${opts.watch ? `, watch=${opts.claudeDir}` : ''})`
+        `peek live on http://${handle.host}:${handle.port} (dataDir=${opts.dataDir}${opts.watch ? `, watch=${opts.claudeDir}` : ''})${
+          handle.host === DEFAULT_BIND_HOST
+            ? ''
+            : ' — NOTE: binding non-loopback host, API is reachable from the network'
+        }`
       );
       const shutdown = async (): Promise<void> => {
         await handle.stop();
@@ -287,7 +305,7 @@ program
 
       // Daemon reachability probe (non-fatal).
       const port = Number(process.env.PEEK_PORT ?? LIVE_DEFAULT_PORT);
-      const reachable = await probeDaemon(`http://localhost:${port}`);
+      const reachable = await probeDaemon(`http://127.0.0.1:${port}`);
       if (!reachable) {
         // eslint-disable-next-line no-console
         console.log('');
@@ -319,10 +337,15 @@ if (isBare && argsAfterNode.length === 0) {
 
   void (async (): Promise<void> => {
     try {
-      const handle = await startServe({ dataDir, port, watch: true, claudeDir });
+      const host = resolveHost();
+      const handle = await startServe({ dataDir, port, host, watch: true, claudeDir });
       // eslint-disable-next-line no-console
       console.log(
-        `peek live on http://localhost:${handle.port} (dataDir=${dataDir}, watch=${claudeDir})`
+        `peek live on http://${handle.host}:${handle.port} (dataDir=${dataDir}, watch=${claudeDir})${
+          handle.host === DEFAULT_BIND_HOST
+            ? ''
+            : ' — NOTE: binding non-loopback host, API is reachable from the network'
+        }`
       );
       const shutdown = async (): Promise<void> => {
         await handle.stop();
