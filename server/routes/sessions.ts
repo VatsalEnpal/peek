@@ -16,6 +16,7 @@
 
 import { Router, type Request, type Response } from 'express';
 
+import { composeLabel } from '../identity/session-label';
 import type { Store, SpanRow, LedgerEntryRow } from '../pipeline/store';
 
 const router = Router();
@@ -50,7 +51,7 @@ router.get('/', (req: Request, res: Response) => {
       }
     }
     const totalTokens = ledgerEntries.reduce((n, l) => n + (l.tokens ?? 0), 0);
-    const label = s.firstPrompt ? s.firstPrompt.slice(0, 80) : s.id;
+    const label = composeLabel(s);
     return {
       id: s.id,
       label,

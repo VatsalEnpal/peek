@@ -24,7 +24,10 @@ function timeAgo(ts: string | undefined, now: Date = new Date()): string {
 }
 
 /** Compose a human-readable session label per the plan's identity spec. */
-export function composeLabel(session: Session, now?: Date): string {
+export function composeLabel(
+  session: Pick<Session, 'id' | 'slug' | 'gitBranch' | 'firstPrompt' | 'startTs'>,
+  now?: Date
+): string {
   const slug = session.slug ?? session.id.slice(0, 8);
   const cleaned = cleanPrompt(session.firstPrompt);
   const first = cleaned.length > 40 ? `${cleaned.slice(0, 40)}…` : cleaned || '(no prompt)';

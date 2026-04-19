@@ -202,6 +202,13 @@ describe('server /api/sessions (after import)', () => {
     const res = await fetch(`${h.baseUrl}/api/sessions/nope-nope-nope/events`);
     expect(res.status).toBe(404);
   });
+
+  test('session label matches spec §5.1 format: slug · "prompt" · branch · timeAgo', async () => {
+    const res = await fetch(`${h.baseUrl}/api/sessions`);
+    const body = (await res.json()) as Array<{ label: string }>;
+    expect(body[0].label).toMatch(/^\S+ · "[^"]+" · \S+ · \d+[smhd] ago$/);
+    expect(body[0].label).toContain(' · "ping from integration test" · main · ');
+  });
 });
 
 describe('server /api/import/preview', () => {

@@ -25,6 +25,7 @@ import { redactBlock, createSessionSalt, sourceLineHash } from './redactor';
 import { reconcileSubagentTokens } from './self-check';
 import { Store, type SessionRow, type TurnRow, type SpanRow, type LedgerEntryRow } from './store';
 import { detectMarkers } from '../bookmarks/marker-detector';
+import { composeLabel } from '../identity/session-label';
 
 export type ImportOpts = {
   /** If true, scan + count but don't write to store. */
@@ -432,7 +433,7 @@ async function importSingleFile(
   const totalTokens = session.ledger.reduce((s, l) => s + (l.tokens ?? 0), 0);
   const summary: ImportSessionSummary = {
     id: session.id,
-    label: session.firstPrompt?.slice(0, 80) ?? session.id,
+    label: composeLabel(session),
     turnCount: session.turns.length,
     totalTokens,
   };
