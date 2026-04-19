@@ -167,6 +167,27 @@ const SUBAGENT_TOOL_NAMES = new Set(['Agent', 'Task', 'TaskCreate']);
 
 const THINKING_TOKEN_THRESHOLD = 500;
 
+// L12: Claude Code wraps slash commands as
+//   <command-message>peek_start</command-message> <command-name>/peek_start</command-name>
+// inside the user stream. These tags should never become a session's
+// firstPrompt / card title. Mirror the regex in server/identity/session-label
+// so stripping is consistent at every layer.
+const COMMAND_TAG_RE =
+  /<(?:local-command-caveat|command-name|command-message|command-args)>[\s\S]*?<\/(?:local-command-caveat|command-name|command-message|command-args)>/g;
+
+function isCommandOnly(promptText: string): boolean {
+  return promptText.replace(COMMAND_TAG_RE, '').trim().length === 0;
+}
+
+/** Extract the command name from a command-only prompt, e.g. "/peek_start". */
+function extractCommandName(promptText: string): string | undefined {
+  const m = promptText.match(/<command-name>\s*(\/?[^<\s]+)\s*<\/command-name>/);
+  if (m && m[1]) return m[1];
+  const m2 = promptText.match(/<command-message>\s*([^<\s]+)\s*<\/command-message>/);
+  if (m2 && m2[1]) return `/${m2[1]}`;
+  return undefined;
+}
+
 function stringifyContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (content == null) return '';
@@ -305,6 +326,13 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
   let ledgerCounter = 0;
   let spanCounter = 0;
 
+  // L12 firstPrompt state: only lock in session.firstPrompt once we see a
+  // real (non-command) user prompt. Until then, remember the most recent
+  // command name so we can fall back to it if every prompt turns out to be
+  // a slash command.
+  let firstPromptLocked = false;
+  let lastCommandName: string | undefined;
+
   // Index tool_use_id → ActionSpan so we can later attach tool_result outputs.
   const toolUseIdToSpan = new Map<string, ActionSpan>();
 
@@ -400,7 +428,27 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
       // ledger entry are ALL dumped by Store.dumpAsText — any raw secret
       // here breaks the A4 "no plaintext in DB" contract (v0.2 L5 fix).
       const promptRedacted = ctx.redactOf?.(promptText)?.redacted ?? promptText;
-      if (!session.firstPrompt) session.firstPrompt = promptRedacted;
+
+      // L12: prefer the first real user prompt as session.firstPrompt.
+      // Slash commands arrive as `<command-message>…</command-message>` XML
+      // and should NOT become the session's card title. If the first few
+      // prompts are all commands, keep a running `lastCommandName` so we
+      // have something to fall back to at end-of-events.
+      if (!firstPromptLocked) {
+        if (isCommandOnly(promptText)) {
+          const name = extractCommandName(promptText);
+          if (name) lastCommandName = name;
+          // Seed firstPrompt with the command name so pre-commit inspectors
+          // still see something sensible — it'll be overwritten as soon as a
+          // real prompt shows up.
+          if (!session.firstPrompt && lastCommandName) {
+            session.firstPrompt = lastCommandName;
+          }
+        } else {
+          session.firstPrompt = promptRedacted;
+          firstPromptLocked = true;
+        }
+      }
       if (!session.startTs) session.startTs = evt.timestamp;
 
       const promptSpan: ActionSpan = {
