@@ -26,6 +26,12 @@ import { Command } from 'commander';
 import { importPath, type ImportResult } from '../server/pipeline/import';
 import { Store } from '../server/pipeline/store';
 import { startServe, defaultClaudeDir } from '../server/cli/serve';
+import {
+  runInstall,
+  probeDaemon,
+  defaultSkillsSourceDir,
+  defaultClaudeConfigDir,
+} from '../server/cli/install';
 
 function defaultDataDir(): string {
   return path.join(os.homedir(), '.peek');
@@ -216,6 +222,78 @@ bookmarks
   });
 
 // ---------------------------------------------------------------------------
+// install
+//
+// Copies the /peek_start and /peek_end slash-command bodies into the user's
+// Claude Code config. See `server/cli/install.ts` for layout selection.
+// ---------------------------------------------------------------------------
+
+program
+  .command('install')
+  .description('Install /peek_start and /peek_end slash commands into ~/.claude/')
+  .option('--force', 'overwrite existing files', false)
+  .option(
+    '--target <dir>',
+    'install target (default: ~/.claude). Use an explicit path for testing.',
+    defaultClaudeConfigDir()
+  )
+  .option(
+    '--skills-source <dir>',
+    'directory containing peek_start/SKILL.md and peek_end/SKILL.md (default: bundled)',
+    defaultSkillsSourceDir()
+  )
+  .action(
+    async (opts: { force: boolean; target: string; skillsSource: string }) => {
+      const result = runInstall({
+        claudeDir: opts.target,
+        skillsSourceDir: opts.skillsSource,
+        force: !!opts.force,
+      });
+
+      if (!result.ok) {
+        // eslint-disable-next-line no-console
+        console.error(`peek install: ${result.message ?? 'failed'}`);
+        if (result.reason === 'no-claude-dir') {
+          // eslint-disable-next-line no-console
+          console.error(
+            [
+              '',
+              'Manual install:',
+              '  1. Install Claude Code (https://claude.ai/code).',
+              '  2. Then run `peek install` again, or copy the files under',
+              '     `skills/peek_start/` and `skills/peek_end/` from this repo',
+              '     into `~/.claude/commands/peek_start.md` and `peek_end.md`.',
+            ].join('\n')
+          );
+        }
+        if (result.reason === 'exists') {
+          // eslint-disable-next-line no-console
+          console.error('Pass --force to overwrite.');
+        }
+        process.exit(1);
+      }
+
+      // eslint-disable-next-line no-console
+      console.log(`peek install: ${result.message ?? 'ok'}`);
+      for (const p of result.written ?? []) {
+        // eslint-disable-next-line no-console
+        console.log(`  wrote: ${p}`);
+      }
+
+      // Daemon reachability probe (non-fatal).
+      const port = Number(process.env.PEEK_PORT ?? LIVE_DEFAULT_PORT);
+      const reachable = await probeDaemon(`http://localhost:${port}`);
+      if (!reachable) {
+        // eslint-disable-next-line no-console
+        console.log('');
+        // eslint-disable-next-line no-console
+        console.log('peek daemon not reachable — run `peek` to start watch + serve.');
+      }
+      process.exit(0);
+    }
+  );
+
+// ---------------------------------------------------------------------------
 // Bare `peek` — live-mode default. Runs watch + serve on $PEEK_PORT ?? 7335.
 // Triggered only when the user passes no subcommand (and no --help / --version
 // long options). We detect this by inspecting process.argv before commander
@@ -223,7 +301,7 @@ bookmarks
 // in v12+ without manipulating the internal state.
 // ---------------------------------------------------------------------------
 
-const KNOWN_COMMANDS = new Set(['serve', 'import', 'verify', 'bookmarks', 'help']);
+const KNOWN_COMMANDS = new Set(['serve', 'import', 'verify', 'bookmarks', 'install', 'help']);
 const argsAfterNode = process.argv.slice(2);
 const isBare =
   argsAfterNode.length === 0 ||
