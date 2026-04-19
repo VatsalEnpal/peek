@@ -18,7 +18,7 @@ import type { ReactElement, ReactNode } from 'react';
  *     silence noise.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useSessionStore, buildTimelineRows, type LedgerEvent } from '../stores/session';
@@ -46,6 +46,43 @@ export function Timeline(): ReactElement {
     () => buildTimelineRows(events, active, expanded),
     [events, active, expanded]
   );
+
+  // L2.2 — auto-scroll preservation. Snapshot whether the user was already at
+  // the bottom BEFORE a refetch/update changes rows, then restore by scrolling
+  // to the new bottom only if they were. Otherwise leave scroll alone so the
+  // user's reading position isn't yanked mid-inspect.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const wasAtBottomRef = useRef<boolean>(true);
+  const prevRowCountRef = useRef<number>(rows.length);
+
+  // Before paint, detect whether the viewport is pinned to the bottom (within
+  // a small tolerance). `useLayoutEffect` runs after DOM updates so we read
+  // the CURRENT scroll state, snapshot it, then re-apply after new rows
+  // append.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const prevCount = prevRowCountRef.current;
+    if (rows.length > prevCount && wasAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    prevRowCountRef.current = rows.length;
+  }, [rows.length]);
+
+  // Track scroll state so the next refetch-driven append knows whether to
+  // follow along. 24px tolerance matches the row height.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = (): void => {
+      wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    // Initialise once — at mount, assume "at bottom" only if content is empty
+    // or fits without scroll. Otherwise default to NOT following.
+    wasAtBottomRef.current = el.scrollHeight <= el.clientHeight;
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   const tokensBySpan = useMemo(() => {
     const m = new Map<string, number>();
@@ -143,6 +180,7 @@ export function Timeline(): ReactElement {
   return (
     <div
       data-testid="timeline"
+      ref={scrollRef}
       style={{
         flex: 1,
         overflow: 'auto',

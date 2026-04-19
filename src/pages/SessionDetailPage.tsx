@@ -40,6 +40,7 @@ import { useSessionStore, buildTimelineRows } from '../stores/session';
 import { useSelectionStore } from '../stores/selection';
 import { useRecordingStore } from '../stores/recording';
 import { bindKeyboard, type KbAction } from '../lib/keyboard';
+import { useLiveSessionUpdates } from '../lib/useLiveSessionUpdates';
 import { truncate } from '../lib/format';
 
 /** Slug-first label per mockup. Fallback ONLY when slug is missing. */
@@ -84,6 +85,10 @@ export function SessionDetailPage(): ReactElement {
     if (spanId) selectSpan(spanId);
     else closeDrawer();
   }, [spanId, selectSpan, closeDrawer]);
+
+  // L2.2 — subscribe to the SSE stream and refresh events / bookmarks for the
+  // currently-viewed session when new spans or markers arrive.
+  useLiveSessionUpdates(id ?? null);
 
   // Global keyboard bindings. Identical to the legacy AppShell bindings so
   // keyboard-first users get the same j/k/h/l/enter/esc/?/⌘⇧R behaviour.

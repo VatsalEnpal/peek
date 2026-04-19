@@ -38,3 +38,39 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--peek-fg-faint);
 }
+
+/* --- L2.2: new timeline rows fade in when live-mode appends them --- */
+@keyframes peek-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.peek-row-enter {
+  animation: peek-fade-in 300ms ease-out both;
+}
+
+/* --- L2.3: LIVE badge pulsing amber dot on the sessions list --- */
+@keyframes peek-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+}
+.peek-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9993a;
+  animation: peek-live-pulse 1.3s ease-in-out infinite;
+}

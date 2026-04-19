@@ -174,6 +174,10 @@ export function TimelineRow({
         aria-selected={selected}
         onClick={onSelect}
         onContextMenu={onContextMenu}
+        // L2.2 — newly-mounted rows fade in (300ms). Existing rows are not
+        // re-mounted across refetches because they're keyed by span.id, so
+        // only spans that genuinely arrived live get the animation.
+        className="peek-row-enter"
         style={{
           // L2.8 — fixed grid columns: ts / icon / TYPE / name / tokens / caret.
           // Widths match the morning-review spec so columns line up across rows

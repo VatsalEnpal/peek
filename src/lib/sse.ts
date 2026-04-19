@@ -47,6 +47,10 @@ export function subscribe(onEvent: SseListener): () => void {
 
   const open = (): void => {
     if (cancelled) return;
+    // Guard against environments that don't implement EventSource (SSR, some
+    // test runners). A missing constructor means we simply never connect —
+    // the returned unsubscribe remains valid and callers see no callbacks.
+    if (typeof EventSource === 'undefined') return;
     const es = new EventSource(STREAM_URL);
     currentSource = es;
 
