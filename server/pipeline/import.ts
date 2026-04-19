@@ -115,6 +115,41 @@ function stringifyBlockContent(block: any): string {
   }
 }
 
+/**
+ * Mirror of `stringifyContent` in model.ts — used to pre-tokenize tool_result
+ * payloads so the assembler's `tokenOf` closure has an entry for them. Without
+ * this, tool_call spans get `tokensConsumed = 0` (checker finding 3, v0.2).
+ */
+function stringifyToolResultContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (content == null) return '';
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (typeof block === 'string') {
+        parts.push(block);
+      } else if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (typeof b.text === 'string') parts.push(b.text);
+        else if (typeof b.content === 'string') parts.push(b.content);
+        else {
+          try {
+            parts.push(JSON.stringify(b));
+          } catch {
+            parts.push(String(b));
+          }
+        }
+      }
+    }
+    return parts.join('\n');
+  }
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
 function stringifyUserPromptContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (content == null) return '';
@@ -166,8 +201,24 @@ function collectContentBlocks(events: any[], rawLines: string[]): ContentBlockIn
     if (!evt || typeof evt !== 'object') continue;
     const lineNumber = eventLineNumbers[i] ?? 0;
 
-    if (isUserPromptEvent(evt)) {
-      out.push({ content: stringifyUserPromptContent(evt.message?.content), lineNumber });
+    if (evt.type === 'user') {
+      if (isUserPromptEvent(evt)) {
+        out.push({ content: stringifyUserPromptContent(evt.message?.content), lineNumber });
+      }
+      // Even when it's a tool_result carrier (not a prompt), harvest each
+      // tool_result block's content so the tokenMap has an entry — otherwise
+      // tool_call spans will read `tokenOf(outStr) === 0` (checker finding 3).
+      const content = evt?.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && typeof block === 'object' && (block as any).type === 'tool_result') {
+            out.push({
+              content: stringifyToolResultContent((block as any).content),
+              lineNumber,
+            });
+          }
+        }
+      }
       continue;
     }
 
@@ -176,6 +227,28 @@ function collectContentBlocks(events: any[], rawLines: string[]): ContentBlockIn
       for (const block of blocks) {
         out.push({ content: stringifyBlockContent(block), lineNumber });
       }
+      continue;
+    }
+
+    // Attachment events — hook_fire / skill_activation span outputs enter the
+    // ledger via stringifyContent(span.outputs ?? span.name ?? ''). Mirror
+    // that exactly so their tokens are costed.
+    if (evt.type === 'attachment') {
+      const atype = evt?.attachment?.type;
+      let contentStr = '';
+      if (atype === 'hook_success' || atype === 'hook_additional_context') {
+        contentStr = stringifyToolResultContent({
+          command: evt.attachment?.command,
+          content: evt.attachment?.content,
+          stdout: evt.attachment?.stdout,
+          stderr: evt.attachment?.stderr,
+          exitCode: evt.attachment?.exitCode,
+        });
+      } else if (atype === 'skill_listing') {
+        contentStr = stringifyToolResultContent(evt.attachment?.content);
+      }
+      if (contentStr.length > 0) out.push({ content: contentStr, lineNumber });
+      continue;
     }
   }
 
@@ -319,6 +392,11 @@ function persistSession(store: Store, session: Session, salt: string): void {
     if (span.startTs !== undefined) row.startTs = span.startTs;
     if (span.endTs !== undefined) row.endTs = span.endTs;
     if (span.durationMs !== undefined) row.durationMs = span.durationMs;
+    // Checker finding 3 (v0.2): persist the span-level token count so the
+    // `/api/sessions/:id/events` response carries a numeric tokens value per
+    // tool_call row (and every other span type). Default to 0 to guarantee
+    // the wire field is always a number, never undefined.
+    row.tokensConsumed = typeof span.tokensConsumed === 'number' ? span.tokensConsumed : 0;
     if (span.inputs !== undefined) row.inputs = span.inputs;
     if (span.outputs !== undefined) row.outputs = span.outputs;
     if (span.metadata !== undefined) row.metadata = span.metadata;

@@ -17,7 +17,7 @@ import { join } from 'node:path';
 
 import Database, { type Database as BetterSqliteDatabase, type Statement } from 'better-sqlite3';
 
-export const SCHEMA_VERSION = '1';
+export const SCHEMA_VERSION = '2';
 
 export type SessionRow = {
   id: string;
@@ -59,6 +59,17 @@ export type SpanRow = {
   startTs?: string;
   endTs?: string;
   durationMs?: number;
+  /**
+   * Sum of token cost attributable to this span. Populated on the in-memory
+   * Span by the assembler and persisted here so `/api/sessions/:id/events`
+   * can surface a numeric token count per row. Added in schema v2 (checker
+   * finding 3 — v0.2 blocking).
+   *
+   * Exposed on the wire as both `tokensConsumed` (canonical) and `tokens`
+   * (alias) — the two have historically been used interchangeably.
+   */
+  tokensConsumed?: number;
+  tokens?: number;
   inputs?: unknown;
   outputs?: unknown;
   metadata?: Record<string, unknown>;
@@ -140,6 +151,7 @@ CREATE TABLE IF NOT EXISTS action_spans (
   start_ts TEXT,
   end_ts TEXT,
   duration_ms INTEGER,
+  tokens_consumed INTEGER,
   inputs_json TEXT,
   outputs_json TEXT,
   metadata_json TEXT
@@ -216,6 +228,7 @@ type SpanDbRow = {
   start_ts: string | null;
   end_ts: string | null;
   duration_ms: number | null;
+  tokens_consumed: number | null;
   inputs_json: string | null;
   outputs_json: string | null;
   metadata_json: string | null;
@@ -284,6 +297,12 @@ function hydrateSpan(row: SpanDbRow): SpanRow {
   if (endTs !== undefined) out.endTs = endTs;
   const durationMs = undef(row.duration_ms);
   if (durationMs !== undefined) out.durationMs = durationMs;
+  const tokensConsumed = undef(row.tokens_consumed);
+  if (tokensConsumed !== undefined) {
+    out.tokensConsumed = tokensConsumed;
+    // Mirror to `tokens` alias so wire readers that expect either name work.
+    out.tokens = tokensConsumed;
+  }
   const inputs = decodeJson<unknown>(row.inputs_json);
   if (inputs !== undefined) out.inputs = inputs;
   const outputs = decodeJson<unknown>(row.outputs_json);
@@ -425,10 +444,12 @@ export class Store {
       insertSpan: this.db.prepare(
         `INSERT OR REPLACE INTO action_spans (
           id, session_id, turn_id, parent_span_id, type, name,
-          start_ts, end_ts, duration_ms, inputs_json, outputs_json, metadata_json
+          start_ts, end_ts, duration_ms, tokens_consumed,
+          inputs_json, outputs_json, metadata_json
         ) VALUES (
           @id, @session_id, @turn_id, @parent_span_id, @type, @name,
-          @start_ts, @end_ts, @duration_ms, @inputs_json, @outputs_json, @metadata_json
+          @start_ts, @end_ts, @duration_ms, @tokens_consumed,
+          @inputs_json, @outputs_json, @metadata_json
         )`
       ),
       insertLedger: this.db.prepare(
@@ -505,6 +526,13 @@ export class Store {
   }
 
   putSpan(s: SpanRow): void {
+    // Prefer explicit tokensConsumed, fall back to tokens alias if provided.
+    const tokens =
+      typeof s.tokensConsumed === 'number'
+        ? s.tokensConsumed
+        : typeof s.tokens === 'number'
+          ? s.tokens
+          : undefined;
     this.stmts.insertSpan.run({
       id: s.id,
       session_id: s.sessionId,
@@ -515,6 +543,7 @@ export class Store {
       start_ts: nullable(s.startTs),
       end_ts: nullable(s.endTs),
       duration_ms: nullable(s.durationMs),
+      tokens_consumed: nullable(tokens),
       inputs_json: encodeJson(s.inputs),
       outputs_json: encodeJson(s.outputs),
       metadata_json: encodeJson(s.metadata),

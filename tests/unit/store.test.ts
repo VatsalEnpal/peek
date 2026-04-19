@@ -44,12 +44,13 @@ describe('Store', () => {
     ...overrides,
   });
 
-  it('creates schema on open and records schema_version=1 in :memory: DB', () => {
+  it('creates schema on open and records schema_version=2 in :memory: DB', () => {
     // Peek at the underlying DB by re-opening via better-sqlite3 is not
     // possible for :memory: — instead assert externally-visible behaviour:
     // getSession on an unknown id is null, listSessions is [], and the
-    // exported SCHEMA_VERSION constant is '1'.
-    expect(SCHEMA_VERSION).toBe('1');
+    // exported SCHEMA_VERSION constant matches the current version
+    // (bumped to '2' in v0.2 for the action_spans.tokens_consumed column).
+    expect(SCHEMA_VERSION).toBe('2');
     expect(store.getSession('nope')).toBeNull();
     expect(store.listSessions()).toEqual([]);
   });
