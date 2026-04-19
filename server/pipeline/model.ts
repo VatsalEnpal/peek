@@ -657,6 +657,41 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
     }
   }
 
+  // --- Per-turn context_carry ledger entry (A2 reconciliation, v0.2 L5). ---
+  // The per-block ledger entries cover content that appears as a literal event
+  // in the JSONL (user prompts, tool_results, attachments, assistant blocks).
+  // But `turn.usage.{input,cacheCreation,cacheRead}` also includes system
+  // prompt, tool catalog, skill metadata, and prior-turn cache reads — context
+  // Claude saw but that is NOT represented as events in this turn.
+  //
+  // A2 pins the per-turn ledger sum to within 2% of reported usage. Rather
+  // than try to synthesise per-fragment entries for every piece of hidden
+  // context (which we cannot recover from the JSONL), we emit ONE synthetic
+  // "context_carry" ledger entry per turn whose tokens equal the gap between
+  // reported-read usage and the per-block sum. Semantically: "content Claude
+  // saw this turn that did not arrive as a new event".
+  for (const turn of turns) {
+    if (!turn.usage) continue;
+    const reportedRead =
+      (Number(turn.usage.inputTokens) || 0) +
+      (Number(turn.usage.cacheCreationTokens) || 0) +
+      (Number(turn.usage.cacheReadTokens) || 0);
+    if (reportedRead <= 0) continue;
+    let currentSum = 0;
+    for (const entry of ledger) {
+      if (entry.turnId === turn.id) currentSum += entry.tokens ?? 0;
+    }
+    const gap = reportedRead - currentSum;
+    if (gap <= 0) continue;
+    ledger.push({
+      id: `ledger-${ledgerCounter++}`,
+      turnId: turn.id,
+      source: 'context_carry',
+      tokens: gap,
+      ts: turn.startTs,
+    });
+  }
+
   // --- Build childSpanIds from parentSpanId. -------------------------------
   // Note: L1.2 (subagent-joiner) will populate Agent span childSpanIds from
   // the agent-<agentId>.jsonl sidecar. Here we only wire the parentUuid chain.
