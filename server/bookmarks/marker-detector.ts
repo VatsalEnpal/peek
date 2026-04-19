@@ -14,6 +14,41 @@ export type MarkerBookmark = {
 const START_REGEX = /@peek-start(?:[ \t]+([^\n]*))?/;
 const END_REGEX = /@peek-end\b/;
 
+/**
+ * Strict, anchored marker recogniser introduced in v0.2.1 (L1.3).
+ *
+ * Matches a single line whose sole payload is a marker directive, e.g.:
+ *
+ *   /peek_start NAME
+ *   @peek-start NAME
+ *   /peek_end
+ *   @peek-end
+ *
+ * Sigil may be `@` or `/`; separator may be `-` or `_`; case-insensitive on
+ * the sigil+keyword segment; name (when present) preserves its original
+ * casing and internal whitespace, with leading/trailing whitespace trimmed.
+ *
+ * Plain-prose mentions like "I will @peek-start later" do NOT match — the
+ * regex is anchored and rejects anything after the name that isn't
+ * whitespace. Unanchored detection (legacy `detectMarkers`) remains for the
+ * v0.2.0 importer path so we don't regress the existing acceptance tests.
+ */
+const MARKER_REGEX = /^\s*(?:@|\/)peek[-_](start|end)(?:\s+(.+?))?\s*$/i;
+
+export type MarkerMatch = { type: 'start' | 'end'; name?: string };
+
+export function matchMarker(text: string): MarkerMatch | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const m = text.match(MARKER_REGEX);
+  if (!m) return null;
+  const type = m[1].toLowerCase() as 'start' | 'end';
+  const rawName = m[2];
+  if (rawName === undefined) return { type };
+  const name = rawName.trim();
+  if (name.length === 0) return { type };
+  return { type, name };
+}
+
 type TextEvent = { text: string; ts?: string; turnId?: string };
 
 function extractUserTexts(session: Session, rawEvents?: any[]): TextEvent[] {
