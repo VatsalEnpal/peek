@@ -192,7 +192,11 @@ export function SessionDetailPage(): ReactElement {
   const spanCount = useMemo(() => events.filter((e) => e.kind === 'span').length, [events]);
 
   const titleRaw = summary?.firstPrompt ?? displayTitle(summary?.slug, id ?? '');
-  const titleDisplay = truncate(titleRaw.replace(/\s+/g, ' ').trim(), 96);
+  // L2.8 — hard-cut the displayed title at 80 chars; CSS ellipsis also clips
+  // if the font measurement still exceeds 80ch in the viewport (see the
+  // title <div>'s `maxWidth: '80ch'`). Two-layer clip so neither a very long
+  // prompt nor a narrow viewport can overflow.
+  const titleDisplay = truncate(titleRaw.replace(/\s+/g, ' ').trim(), 80);
 
   return (
     <div
@@ -330,6 +334,8 @@ export function SessionDetailPage(): ReactElement {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            // L2.8 — ensure viewport-narrow layouts also clip at ~80ch.
+            maxWidth: '80ch',
           }}
           title={titleRaw}
         >

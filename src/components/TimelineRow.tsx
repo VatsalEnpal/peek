@@ -175,8 +175,11 @@ export function TimelineRow({
         onClick={onSelect}
         onContextMenu={onContextMenu}
         style={{
+          // L2.8 — fixed grid columns: ts / icon / TYPE / name / tokens / caret.
+          // Widths match the morning-review spec so columns line up across rows
+          // regardless of content length.
           display: 'grid',
-          gridTemplateColumns: '96px 20px 88px 1fr 96px 16px',
+          gridTemplateColumns: '80px 32px 80px 1fr 80px 24px',
           alignItems: 'baseline',
           columnGap: 12,
           width: '100%',
@@ -276,7 +279,7 @@ export function TimelineRow({
               fontSize: 'var(--peek-fs-xs)',
               display: 'inline-block',
               textAlign: 'center',
-              width: 16,
+              width: 24,
               cursor: 'pointer',
             }}
           >

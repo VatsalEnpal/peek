@@ -46,7 +46,8 @@ export function FilterChips(): ReactElement {
       data-testid="filter-chips"
       role="group"
       aria-label="timeline filters"
-      style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
+      // L2.8 — 8px gap between chips (previously cramped at 6px).
+      style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
     >
       {CHIP_DEFS.map((def) => {
         const on = active.has(def.key as ChipKey);
@@ -71,7 +72,7 @@ export function FilterChips(): ReactElement {
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'baseline',
-              gap: 6,
+              gap: 8,
             }}
           >
             <span>{def.label}</span>
