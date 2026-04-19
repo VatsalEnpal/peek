@@ -145,9 +145,19 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
   // check whether any SEGMENT of the relative remainder starts with `.`.
   // Fixes a silent no-op daemon on default `~/.claude/projects` setups
   // (v0.2.1 L5-followup).
+  // L15: default to live-only — `ignoreInitial: true` skips the bulk import of
+  // every existing JSONL in `~/.claude/projects/` on startup. Users with months
+  // of accumulated Claude Code history were seeing a 2+ minute unresponsive
+  // daemon because each transcript (2600+ lines) blocks the event loop during
+  // sync tokenization. The product value is watching NEW sessions live —
+  // historical retrospective import is opt-in via `peek import <path>`.
+  //
+  // Set `PEEK_WATCH_EXISTING=1` to opt into the old behavior (bulk-import
+  // everything on startup).
+  const watchExisting = process.env.PEEK_WATCH_EXISTING === '1';
   const rootPrefix = claudeDir.endsWith('/') ? claudeDir : claudeDir + '/';
   const watcher: FSWatcher = watch(claudeDir, {
-    ignoreInitial: false,
+    ignoreInitial: !watchExisting,
     persistent: true,
     awaitWriteFinish: false,
     ignored: (p: string) => {

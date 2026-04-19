@@ -330,36 +330,27 @@ export function SessionsPage(): ReactElement {
               ) : (
                 <>
                   <div style={{ color: 'var(--peek-fg-dim)', fontSize: 'var(--peek-fs-md)' }}>
-                    No sessions yet.
+                    Waiting for Claude Code activity.
                   </div>
                   <div style={{ maxWidth: 560, lineHeight: 1.55 }}>
-                    Run{' '}
-                    <code
-                      className="peek-mono"
-                      style={{
-                        background: 'var(--peek-surface-2)',
-                        border: '1px solid var(--peek-border)',
-                        padding: '1px 6px',
-                        color: 'var(--peek-fg)',
-                        fontSize: 'var(--peek-fs-xs)',
-                      }}
-                    >
-                      peek watch
-                    </code>{' '}
-                    to capture live, or{' '}
-                    <code
-                      className="peek-mono"
-                      style={{
-                        background: 'var(--peek-surface-2)',
-                        border: '1px solid var(--peek-border)',
-                        padding: '1px 6px',
-                        color: 'var(--peek-fg)',
-                        fontSize: 'var(--peek-fs-xs)',
-                      }}
-                    >
-                      peek import &lt;path&gt;
-                    </code>{' '}
-                    for existing sessions.
+                    Open Claude Code in any project — new sessions appear here live.
+                    <br />
+                    <span style={{ color: 'var(--peek-fg-faint)' }}>
+                      To also pull in older sessions, run{' '}
+                      <code
+                        className="peek-mono"
+                        style={{
+                          background: 'var(--peek-surface-2)',
+                          border: '1px solid var(--peek-border)',
+                          padding: '1px 6px',
+                          color: 'var(--peek-fg)',
+                          fontSize: 'var(--peek-fs-xs)',
+                        }}
+                      >
+                        peek import ~/.claude/projects
+                      </code>
+                      .
+                    </span>
                   </div>
                 </>
               )}
