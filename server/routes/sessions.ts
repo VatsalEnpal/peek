@@ -38,9 +38,7 @@ router.get('/', (req: Request, res: Response) => {
 
   const summaries = rows.map((s) => {
     const events = store.listEvents(s.id);
-    const ledgerEntries = events.filter((e) => e.kind === 'ledger') as Array<
-      LedgerEntryRow & { kind: 'ledger' }
-    >;
+    const turns = store.listTurns(s.id);
     const turnIds = new Set<string>();
     for (const e of events) {
       if (e.kind === 'span' && (e as SpanRow & { kind: 'span' }).turnId) {
@@ -50,7 +48,37 @@ router.get('/', (req: Request, res: Response) => {
         turnIds.add((e as LedgerEntryRow & { kind: 'ledger' }).turnId as string);
       }
     }
-    const totalTokens = ledgerEntries.reduce((n, l) => n + (l.tokens ?? 0), 0);
+    for (const t of turns) turnIds.add(t.id);
+
+    // L13: totalTokens is max-per-turn `usage.{input,output,cacheCreation,cacheRead}Tokens`
+    // — the same formula the CONTEXT gauge and the reconciler use. Ledger
+    // sums under-report real context-window pressure by ~40x because spans
+    // only carry per-tool content tokens, not system prompt + cache + history.
+    // A session card's progress bar is framed against a 200 k ceiling, so
+    // max-per-turn is the right number (not a session-wide sum, which would
+    // trivially exceed the ceiling on any realistic session).
+    let maxPerTurn = 0;
+    let anyTurnHasUsage = false;
+    for (const t of turns) {
+      if (!t.usage) continue;
+      anyTurnHasUsage = true;
+      const total =
+        (Number(t.usage.inputTokens) || 0) +
+        (Number(t.usage.outputTokens) || 0) +
+        (Number(t.usage.cacheCreationTokens) || 0) +
+        (Number(t.usage.cacheReadTokens) || 0);
+      if (total > maxPerTurn) maxPerTurn = total;
+    }
+    // Legacy fallback: imports before turn usage was recorded have no
+    // turn.usage. Sum the ledger tokens so the card isn't stuck at 0.
+    let totalTokens = maxPerTurn;
+    if (!anyTurnHasUsage) {
+      const ledgerEntries = events.filter((e) => e.kind === 'ledger') as Array<
+        LedgerEntryRow & { kind: 'ledger' }
+      >;
+      totalTokens = ledgerEntries.reduce((n, l) => n + (l.tokens ?? 0), 0);
+    }
+
     const label = composeLabel(s);
     return {
       id: s.id,
