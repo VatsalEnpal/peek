@@ -23,13 +23,20 @@ import path from 'node:path';
 
 import { Command } from 'commander';
 
-import { createServer } from '../server/index';
 import { importPath, type ImportResult } from '../server/pipeline/import';
 import { Store } from '../server/pipeline/store';
+import { startServe, defaultClaudeDir } from '../server/cli/serve';
 
 function defaultDataDir(): string {
   return path.join(os.homedir(), '.peek');
 }
+
+/**
+ * Live-mode default port. v0.2.0 used 7334 for `peek serve`; v0.2.1 adds a
+ * bare `peek` entry point on 7335 that co-hosts the watcher. `$PEEK_PORT`
+ * wins over both when set.
+ */
+const LIVE_DEFAULT_PORT = 7335;
 
 function readPkgVersion(): string {
   try {
@@ -58,13 +65,29 @@ program
   .description('Start the Peek HTTP server')
   .option('-p, --port <port>', 'port to listen on', '7334')
   .option('-d, --data-dir <dir>', 'data directory', defaultDataDir())
-  .action(async (opts: { port: string; dataDir: string }) => {
-    const port = parseInt(opts.port, 10);
-    const handle = createServer({ dataDir: opts.dataDir, port });
-    await handle.listen();
-    // eslint-disable-next-line no-console
-    console.log(`peek serving on http://localhost:${port} (dataDir=${opts.dataDir})`);
-  });
+  .option('--watch', 'also run the JSONL file watcher alongside the server', false)
+  .option('--claude-dir <dir>', 'directory watched when --watch is set', defaultClaudeDir())
+  .action(
+    async (opts: { port: string; dataDir: string; watch: boolean; claudeDir: string }) => {
+      const port = parseInt(opts.port, 10);
+      const handle = await startServe({
+        dataDir: opts.dataDir,
+        port,
+        watch: !!opts.watch,
+        claudeDir: opts.claudeDir,
+      });
+      // eslint-disable-next-line no-console
+      console.log(
+        `peek serving on http://localhost:${handle.port} (dataDir=${opts.dataDir}${opts.watch ? `, watch=${opts.claudeDir}` : ''})`
+      );
+      const shutdown = async (): Promise<void> => {
+        await handle.stop();
+        process.exit(0);
+      };
+      process.on('SIGTERM', shutdown);
+      process.on('SIGINT', shutdown);
+    }
+  );
 
 // ---------------------------------------------------------------------------
 // import
@@ -192,8 +215,48 @@ bookmarks
     }
   });
 
-program.parseAsync(process.argv).catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+// ---------------------------------------------------------------------------
+// Bare `peek` — live-mode default. Runs watch + serve on $PEEK_PORT ?? 7335.
+// Triggered only when the user passes no subcommand (and no --help / --version
+// long options). We detect this by inspecting process.argv before commander
+// parses it — commander has no first-class "default command" for zero args
+// in v12+ without manipulating the internal state.
+// ---------------------------------------------------------------------------
+
+const KNOWN_COMMANDS = new Set(['serve', 'import', 'verify', 'bookmarks', 'help']);
+const argsAfterNode = process.argv.slice(2);
+const isBare =
+  argsAfterNode.length === 0 ||
+  (!argsAfterNode[0].startsWith('-') && !KNOWN_COMMANDS.has(argsAfterNode[0]));
+
+if (isBare && argsAfterNode.length === 0) {
+  const dataDir = defaultDataDir();
+  const claudeDir = defaultClaudeDir();
+  const port = Number(process.env.PEEK_PORT ?? LIVE_DEFAULT_PORT);
+
+  void (async (): Promise<void> => {
+    try {
+      const handle = await startServe({ dataDir, port, watch: true, claudeDir });
+      // eslint-disable-next-line no-console
+      console.log(
+        `peek live on http://localhost:${handle.port} (dataDir=${dataDir}, watch=${claudeDir})`
+      );
+      const shutdown = async (): Promise<void> => {
+        await handle.stop();
+        process.exit(0);
+      };
+      process.on('SIGTERM', shutdown);
+      process.on('SIGINT', shutdown);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  })();
+} else {
+  program.parseAsync(process.argv).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}
