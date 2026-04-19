@@ -50,7 +50,7 @@ describe('Store', () => {
     // getSession on an unknown id is null, listSessions is [], and the
     // exported SCHEMA_VERSION constant matches the current version
     // (bumped to '2' in v0.2 for the action_spans.tokens_consumed column).
-    expect(SCHEMA_VERSION).toBe('2');
+    expect(SCHEMA_VERSION).toBe('3');
     expect(store.getSession('nope')).toBeNull();
     expect(store.listSessions()).toEqual([]);
   });

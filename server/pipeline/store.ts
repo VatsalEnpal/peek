@@ -17,7 +17,7 @@ import { join } from 'node:path';
 
 import Database, { type Database as BetterSqliteDatabase, type Statement } from 'better-sqlite3';
 
-export const SCHEMA_VERSION = '2';
+export const SCHEMA_VERSION = '3';
 
 export type SessionRow = {
   id: string;
@@ -102,6 +102,18 @@ export type BookmarkRow = {
   metadata?: Record<string, unknown>;
 };
 
+export type RecordingStatus = 'recording' | 'closed' | 'auto-closed' | 'auto-closed-by-new-start';
+
+export type RecordingRow = {
+  id: string;
+  name: string;
+  sessionId: string;
+  startTs: string;
+  endTs?: string;
+  status: RecordingStatus;
+  createdAt: string;
+};
+
 export type ListEventsOpts = {
   start?: string;
   end?: string;
@@ -184,6 +196,19 @@ CREATE TABLE IF NOT EXISTS bookmarks (
   metadata_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_bookmarks_session ON bookmarks(session_id);
+
+CREATE TABLE IF NOT EXISTS recordings (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  start_ts TEXT NOT NULL,
+  end_ts TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recordings_session ON recordings(session_id);
+CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
+CREATE INDEX IF NOT EXISTS idx_recordings_start ON recordings(start_ts);
 `;
 
 function encodeJson(value: unknown): string | null {
@@ -255,6 +280,30 @@ type BookmarkDbRow = {
   end_ts: string | null;
   metadata_json: string | null;
 };
+
+type RecordingDbRow = {
+  id: string;
+  name: string;
+  session_id: string;
+  start_ts: string;
+  end_ts: string | null;
+  status: string;
+  created_at: string;
+};
+
+function hydrateRecording(row: RecordingDbRow): RecordingRow {
+  const out: RecordingRow = {
+    id: row.id,
+    name: row.name,
+    sessionId: row.session_id,
+    startTs: row.start_ts,
+    status: row.status as RecordingStatus,
+    createdAt: row.created_at,
+  };
+  const endTs = undef(row.end_ts);
+  if (endTs !== undefined) out.endTs = endTs;
+  return out;
+}
 
 function hydrateSession(row: SessionDbRow): SessionRow {
   const out: SessionRow = { id: row.id, salt: row.salt };
@@ -361,6 +410,11 @@ export class Store {
     listSpansBySession: Statement;
     listLedgerBySession: Statement;
     listTurnsBySession: Statement;
+    insertRecording: Statement;
+    getRecording: Statement;
+    listRecordings: Statement;
+    listOpenRecordingsBySession: Statement;
+    closeRecording: Statement;
   };
 
   constructor(dbPath: string) {
@@ -483,6 +537,21 @@ export class Store {
       ),
       listTurnsBySession: this.db.prepare(
         `SELECT * FROM turns WHERE session_id = ? ORDER BY turn_index ASC, id ASC`
+      ),
+      insertRecording: this.db.prepare(
+        `INSERT OR REPLACE INTO recordings (
+          id, name, session_id, start_ts, end_ts, status, created_at
+        ) VALUES (
+          @id, @name, @session_id, @start_ts, @end_ts, @status, @created_at
+        )`
+      ),
+      getRecording: this.db.prepare(`SELECT * FROM recordings WHERE id = ?`),
+      listRecordings: this.db.prepare(`SELECT * FROM recordings ORDER BY start_ts DESC, id ASC`),
+      listOpenRecordingsBySession: this.db.prepare(
+        `SELECT * FROM recordings WHERE session_id = ? AND status = 'recording' ORDER BY start_ts ASC, id ASC`
+      ),
+      closeRecording: this.db.prepare(
+        `UPDATE recordings SET end_ts = @end_ts, status = @status WHERE id = @id`
       ),
     };
   }
@@ -610,6 +679,38 @@ export class Store {
       end_ts: nullable(b.endTs),
       metadata_json: encodeJson(b.metadata),
     });
+  }
+
+  putRecording(r: RecordingRow): void {
+    this.stmts.insertRecording.run({
+      id: r.id,
+      name: r.name,
+      session_id: r.sessionId,
+      start_ts: r.startTs,
+      end_ts: nullable(r.endTs),
+      status: r.status,
+      created_at: r.createdAt,
+    });
+  }
+
+  getRecording(id: string): RecordingRow | null {
+    const row = this.stmts.getRecording.get(id) as RecordingDbRow | undefined;
+    if (!row) return null;
+    return hydrateRecording(row);
+  }
+
+  listRecordings(): RecordingRow[] {
+    const rows = this.stmts.listRecordings.all() as RecordingDbRow[];
+    return rows.map(hydrateRecording);
+  }
+
+  listOpenRecordingsBySession(sessionId: string): RecordingRow[] {
+    const rows = this.stmts.listOpenRecordingsBySession.all(sessionId) as RecordingDbRow[];
+    return rows.map(hydrateRecording);
+  }
+
+  closeRecording(id: string, endTs: string, status: RecordingStatus): void {
+    this.stmts.closeRecording.run({ id, end_ts: endTs, status });
   }
 
   listBookmarks(sessionId?: string): BookmarkRow[] {
