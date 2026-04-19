@@ -27,6 +27,7 @@ import { HelpPanel } from '../components/HelpPanel';
 import { useSessionStore, type SessionSummary } from '../stores/session';
 import { useSelectionStore } from '../stores/selection';
 import { useBookmarksStore } from '../stores/bookmarks';
+import { useLiveSessionsList } from '../lib/useLiveSessionsList';
 import { truncate } from '../lib/format';
 import type { BookmarkDto } from '../lib/api';
 
@@ -57,9 +58,18 @@ function bucketFor(s: SessionSummary, now: Date = new Date()): DateBucket {
   return 'earlier';
 }
 
-function groupSessions(sessions: SessionSummary[]): GroupedSessions {
+function groupSessions(
+  sessions: SessionSummary[],
+  isLive: (id: string) => boolean = (): boolean => false
+): GroupedSessions {
   const out: GroupedSessions = { active: [], today: [], yesterday: [], earlier: [] };
-  for (const s of sessions) out[bucketFor(s)].push(s);
+  for (const s of sessions) {
+    // L2.3 — live sessions always surface in the `active` bucket so a
+    // newly-started session appears at the top of the list, regardless of
+    // its startTs-derived day bucket.
+    if (isLive(s.id)) out.active.push(s);
+    else out[bucketFor(s)].push(s);
+  }
   return out;
 }
 
@@ -110,6 +120,11 @@ export function SessionsPage(): ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleHelp = useSelectionStore((s) => s.toggleHelp);
 
+  // L2.3 — live-session activity tracking + LIVE-badge gating for the watch
+  // hint. The hook owns its own SSE subscription; the Sessions page only
+  // reads the two predicates.
+  const { isLive, hasAnyLive } = useLiveSessionsList();
+
   useEffect(() => {
     void fetchSessions();
   }, [fetchSessions]);
@@ -119,7 +134,7 @@ export function SessionsPage(): ReactElement {
     [sessions, search]
   );
 
-  const grouped = useMemo(() => groupSessions(filtered), [filtered]);
+  const grouped = useMemo(() => groupSessions(filtered, isLive), [filtered, isLive]);
   const totalSpans = useMemo(
     () => sessions.reduce((n, s) => n + (s.turnCount ?? 0), 0),
     [sessions]
@@ -351,7 +366,10 @@ export function SessionsPage(): ReactElement {
             </div>
           )}
 
-          {sessionsError === null && sessions.length > 0 && (
+          {sessionsError === null && sessions.length > 0 && !hasAnyLive() && (
+            // L2.3 gate — when at least one session is live, the LIVE badge
+            // already tells the user the watcher is active; this static hint
+            // would just be duplicate chrome, so suppress it.
             <div
               data-testid="sessions-watch-hint"
               className="peek-mono"
@@ -426,6 +444,7 @@ export function SessionsPage(): ReactElement {
                     key={s.id}
                     session={s}
                     expanded={expanded.has(s.id)}
+                    live={isLive(s.id)}
                     onToggle={(): void => toggleExpand(s.id)}
                   />
                 ))}
@@ -462,10 +481,12 @@ export function SessionsPage(): ReactElement {
 function SessionRow({
   session: s,
   expanded,
+  live,
   onToggle,
 }: {
   session: SessionSummary;
   expanded: boolean;
+  live: boolean;
   onToggle: () => void;
 }): ReactElement {
   const ratio = Math.min(1, Math.max(0, s.totalTokens / CONTEXT_CEILING));
@@ -549,9 +570,33 @@ function SessionRow({
               fontWeight: 500,
               fontFamily: 'var(--peek-font-mono)',
               fontSize: 'var(--peek-fs-md)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
             }}
           >
             {displaySlug(s)}
+            {live && (
+              <span
+                data-testid={`session-live-badge-${s.id}`}
+                aria-label="live"
+                className="peek-mono"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  fontSize: 9,
+                  letterSpacing: '0.18em',
+                  textTransform: 'uppercase',
+                  color: '#d9993a',
+                  padding: '1px 6px 1px 5px',
+                  border: '1px solid rgba(217, 153, 58, 0.35)',
+                }}
+              >
+                <span aria-hidden="true" className="peek-live-dot" />
+                live
+              </span>
+            )}
           </div>
 
           <div
