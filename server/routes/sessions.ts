@@ -55,6 +55,8 @@ router.get('/', (req: Request, res: Response) => {
     return {
       id: s.id,
       label,
+      slug: s.slug ?? null,
+      gitBranch: s.gitBranch ?? null,
       firstPrompt: s.firstPrompt ?? null,
       turnCount: turnIds.size,
       totalTokens,

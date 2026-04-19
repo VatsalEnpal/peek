@@ -21,6 +21,10 @@ import { CHIP_DEFS } from '../lib/icons';
 export type SessionSummary = {
   id: string;
   label: string;
+  /** Human-adjective slug (e.g. "velvet-dawn-cipher"). May be null for legacy rows. */
+  slug?: string | null;
+  /** Git branch at capture time. May be null if the run was outside a repo. */
+  gitBranch?: string | null;
   firstPrompt: string | null;
   turnCount: number;
   totalTokens: number;

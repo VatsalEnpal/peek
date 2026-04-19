@@ -68,7 +68,7 @@ export function SessionPicker(): ReactElement {
       data-testid="session-picker-root"
       style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}
     >
-      <label
+      <div
         data-testid="session-picker"
         style={{
           display: 'inline-flex',
@@ -84,39 +84,26 @@ export function SessionPicker(): ReactElement {
         >
           SESSION
         </span>
-        <select
-          value={selectedId ?? ''}
-          disabled={loading || sessions.length === 0}
-          onChange={(e): void => {
-            const id = e.target.value || null;
-            void selectSession(id);
-          }}
-          style={{
-            background: 'var(--peek-surface-2)',
-            color: 'var(--peek-fg)',
-            border: '1px solid var(--peek-border)',
-            padding: '4px 8px',
-            fontFamily: 'var(--peek-font-mono)',
-            fontSize: 'var(--peek-fs-sm)',
-            minWidth: 280,
-            maxWidth: 520,
-          }}
-        >
-          {sessions.length === 0 && (
-            <option value="">{loading ? 'loading…' : 'no sessions'}</option>
-          )}
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {truncate(s.label, 60)} · {s.timeAgo}
-            </option>
-          ))}
-        </select>
+        {/*
+          The legacy <select> picker was superseded by /routes: clicking a row
+          on the L1 SessionsPage navigates to /session/:id. The per-session
+          bookmark disclosure (below) is retained so recording-flow tests and
+          Mode C bookmark nesting still function.
+        */}
+        {loading && sessions.length === 0 && (
+          <span
+            className="peek-mono"
+            style={{ fontSize: 'var(--peek-fs-xs)', color: 'var(--peek-fg-faint)' }}
+          >
+            loading…
+          </span>
+        )}
         {error !== null && (
           <span style={{ color: 'var(--peek-bad)', fontSize: 'var(--peek-fs-xs)' }}>
             {truncate(error, 40)}
           </span>
         )}
-      </label>
+      </div>
 
       {sessions.length > 0 && (
         <ul

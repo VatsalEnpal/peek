@@ -112,6 +112,9 @@ function resetStores(): void {
 beforeEach(() => {
   installFetchStub();
   resetStores();
+  // Tests render <App/>, which is now router-driven — point the URL at the
+  // detail route so AppShell mounts (L2.1 wrapping).
+  window.history.pushState({}, '', '/session/sess-1');
 });
 
 afterEach(() => {

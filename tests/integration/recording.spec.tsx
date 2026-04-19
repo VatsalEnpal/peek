@@ -178,6 +178,9 @@ function resetStores(): void {
 beforeEach(() => {
   installFetchStub();
   resetStores();
+  // Tests render <App/>, which is now router-driven — point the URL at the
+  // detail route so AppShell mounts (L2.1 wrapping).
+  window.history.pushState({}, '', '/session/sess-rec-1');
   // happy-dom doesn't define window.prompt; vi.spyOn requires the method to
   // exist as a function on the target before it can replace it.
   if (typeof window.prompt !== 'function') {
