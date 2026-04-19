@@ -81,6 +81,43 @@ export function detectMarkers(session: Session, rawEvents?: any[]): MarkerBookma
 
   for (const ev of texts) {
     if (!ev.text) continue;
+
+    // First, try the strict anchored slash-command matcher (v0.2.1 L1.3).
+    // It fires for lines whose entire payload IS the marker directive, e.g.
+    // `/peek_start foo` or `@peek-end`. If it matches we short-circuit so
+    // the legacy inline regex doesn't also fire on the same line.
+    const strict = matchMarker(ev.text);
+    if (strict) {
+      if (strict.type === 'start') {
+        if (open) {
+          warnings.push(
+            `nested /peek_start or @peek-start while "${open.label}" was open; keeping original`
+          );
+        } else {
+          const label = strict.name ?? 'unlabeled';
+          open = { label, startTs: ev.ts ?? new Date().toISOString() };
+        }
+      } else {
+        // type === 'end'
+        if (!open) {
+          warnings.push('orphan /peek_end or @peek-end with no start; ignored');
+          continue;
+        }
+        bookmarks.push({
+          id: `bm-${randomUUID()}`,
+          sessionId: session.id,
+          label: open.label,
+          source: 'marker',
+          startTs: open.startTs,
+          endTs: ev.ts,
+          metadata: warnings.length ? { warnings: [...warnings] } : undefined,
+        });
+        open = null;
+      }
+      continue;
+    }
+
+    // Legacy loose inline detection (v0.2.0 `@peek-start X ... @peek-end`).
     const startMatch = ev.text.match(START_REGEX);
     const endMatch = ev.text.match(END_REGEX);
 

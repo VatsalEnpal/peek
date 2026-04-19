@@ -31,6 +31,7 @@ import bookmarksRouter from './routes/bookmarks';
 import unmaskRouter from './routes/unmask';
 import openRouter from './routes/open';
 import sseRouter from './api/sse';
+import markersRouter from './api/markers';
 
 const LOCALHOST_ORIGIN = /^http:\/\/localhost(:\d+)?$/;
 
@@ -76,6 +77,7 @@ export function createServer(opts: CreateServerOpts): ServerHandle {
   app.use('/api/unmask', unmaskRouter);
   app.use('/api/open', openRouter);
   app.use('/api/events', sseRouter);
+  app.use('/api/markers', markersRouter);
 
   // Static serving for the Vite bundle. Always mount if a build exists on
   // disk — the CLI never sets NODE_ENV=production, and the old gate meant
