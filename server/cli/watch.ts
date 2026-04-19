@@ -41,8 +41,25 @@ export type StartWatchOpts = {
   claudeDir: string;
 };
 
+export type ImportStatus = {
+  /** Files successfully imported since this watcher started. */
+  importedCount: number;
+  /** Files currently sitting in the queue, waiting for the worker. */
+  queueLength: number;
+  /** True iff the worker is actively processing a file right now. */
+  inProgress: boolean;
+  /** Path of the file currently being imported, when `inProgress`. */
+  currentFile: string | null;
+};
+
 export type Watcher = {
   stop: () => Promise<void>;
+  /**
+   * Live view of the import queue. The HTTP layer exposes this via
+   * `/api/import-status` so the UI can render a "importing N of M sessions"
+   * progress indicator during the bulk initial scan on first launch.
+   */
+  status: () => ImportStatus;
 };
 
 type FileState = {
@@ -183,6 +200,63 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
     }
   };
 
+  // ── Import queue ────────────────────────────────────────────────────────
+  // Pre-fix, each `add` event spawned its own 100ms debounce timer, and
+  // after the debounce fired we called `void importFile(absPath)` — 93
+  // concurrent sync-heavy imports started at once, saturating the event
+  // loop for minutes while the HTTP server's `listen()` had already
+  // resolved. healthz requests timed out against a process at 100% CPU.
+  //
+  // Fix: a single drain queue. `add`/`change` push the path onto the
+  // queue; the worker imports one file at a time and yields to the event
+  // loop via `await new Promise(r => setImmediate(r))` between files so
+  // HTTP handlers (and timers) interleave freely. We also dedupe — if
+  // the same file is enqueued twice before its turn, we only import once.
+  const queue: string[] = [];
+  const queued = new Set<string>();
+  let inProgress = false;
+  let currentFile: string | null = null;
+  let importedCount = 0;
+  let draining = false;
+  let drainPromise: Promise<void> | null = null;
+  let stopped = false;
+
+  const drainQueue = async (): Promise<void> => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (queue.length > 0 && !stopped) {
+        const next = queue.shift()!;
+        queued.delete(next);
+        inProgress = true;
+        currentFile = next;
+        try {
+          await importFile(next);
+          importedCount += 1;
+        } catch {
+          // importFile already logs; never let one bad file break the queue.
+        }
+        inProgress = false;
+        currentFile = null;
+        // Yield to the libuv poll phase so pending I/O + timers run before
+        // we pick up the next file. Without this, a tight `await import`
+        // loop keeps the microtask queue full and starves HTTP responses.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    } finally {
+      draining = false;
+      drainPromise = null;
+    }
+  };
+
+  const enqueue = (absPath: string): void => {
+    if (stopped) return;
+    if (queued.has(absPath)) return;
+    queued.add(absPath);
+    queue.push(absPath);
+    if (!drainPromise) drainPromise = drainQueue();
+  };
+
   const scheduleImport = (absPath: string): void => {
     const state = fileStates.get(absPath) ?? {
       lastSize: 0,
@@ -191,10 +265,13 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
       lastSpanCounts: new Map<string, number>(),
     };
     fileStates.set(absPath, state);
+    // Keep the 100ms debounce so `change` bursts (macOS fires 3-5× per
+    // appendFileSync) collapse into one enqueue. The debounce only gates
+    // queue entry — actual CPU work is paced by the single-worker drain.
     if (state.debounceTimer) clearTimeout(state.debounceTimer);
     state.debounceTimer = setTimeout(() => {
       state.debounceTimer = null;
-      void importFile(absPath);
+      enqueue(absPath);
     }, DEBOUNCE_MS);
   };
 
@@ -218,11 +295,31 @@ export async function startWatch(opts: StartWatchOpts): Promise<Watcher> {
   });
 
   return {
+    status(): ImportStatus {
+      return {
+        importedCount,
+        queueLength: queue.length,
+        inProgress,
+        currentFile,
+      };
+    },
     async stop() {
+      stopped = true;
+      // Clear pending debounce timers so nothing gets enqueued after stop.
       for (const state of fileStates.values()) {
         if (state.debounceTimer) clearTimeout(state.debounceTimer);
       }
       fileStates.clear();
+      // Drop anything still queued; let the in-flight import settle.
+      queue.length = 0;
+      queued.clear();
+      if (drainPromise) {
+        try {
+          await drainPromise;
+        } catch {
+          /* already logged */
+        }
+      }
       await watcher.close();
     },
   };

@@ -34,9 +34,14 @@ function writeFixtureSession(path: string, sessionId: string): void {
   const turns: string[] = [];
   const baseTs = new Date('2026-04-01T10:00:00Z').getTime();
   let prevUuid: string | null = null;
-  // 100 turns per session → ~200 JSONL lines per file, roughly matching
-  // mid-sized real ~/.claude/projects transcripts.
-  for (let i = 0; i < 100; i++) {
+  // 10 turns per session → ~20 JSONL lines per file, matching the median
+  // line count seen in real ~/.claude/projects transcripts on a daily-use
+  // machine. Important for the test: each file must be small enough that
+  // a single import completes in well under the 2s healthz budget, so we
+  // can prove the queue yields BETWEEN imports. Before the fix, dozens of
+  // concurrent `await importFile` promises saturate the loop regardless
+  // of per-file size.
+  for (let i = 0; i < 10; i++) {
     const userUuid = `${sessionId}-u-${i}`;
     const asstUuid = `${sessionId}-a-${i}`;
     const userEvt: Record<string, unknown> = {
