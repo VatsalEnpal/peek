@@ -69,6 +69,12 @@ export type ActionSpan = {
 
 export type LedgerSourceOffset = {
   file: string;
+  /**
+   * 1-based source line number in the JSONL file. Present when the
+   * import-orchestrator plumbs through the line index; optional on legacy
+   * callers.
+   */
+  line?: number;
   byteStart: number;
   byteEnd: number;
   sourceLineHash: string;
@@ -82,6 +88,12 @@ export type LedgerEntry = {
   tokens: number;
   contentRedacted?: string;
   sourceOffset?: LedgerSourceOffset;
+  /**
+   * 64-char hex SHA-256 of the raw JSONL source line this entry originated
+   * from. Mirrors `sourceOffset.sourceLineHash` for callers that want the
+   * hash at the top level (per plan §LedgerEntry lines 143-150).
+   */
+  sourceLineHash?: string;
   ts?: string;
 };
 
@@ -302,6 +314,11 @@ export function assembleSession(events: any[], ctx: AssembleContext): Session {
       sourceOffset: redact?.sourceOffset,
       ts,
     };
+    // Mirror the per-line SHA-256 to the top level so downstream consumers can
+    // pick it up without drilling into sourceOffset (plan §LedgerEntry).
+    if (redact?.sourceOffset?.sourceLineHash) {
+      entry.sourceLineHash = redact.sourceOffset.sourceLineHash;
+    }
     ledger.push(entry);
     return tokens;
   }

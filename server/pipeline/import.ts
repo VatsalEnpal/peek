@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { parseJsonl } from './parser';
 import { assembleSession, type Session, type LedgerSourceOffset } from './model';
@@ -24,6 +24,7 @@ import { countTokensOffline, countTokensViaAPI } from './tokenizer';
 import { redactBlock, createSessionSalt, sourceLineHash } from './redactor';
 import { reconcileSubagentTokens } from './self-check';
 import { Store, type SessionRow, type TurnRow, type SpanRow, type LedgerEntryRow } from './store';
+import { joinSubagentsIntoSession } from './subagent-joiner';
 import { detectMarkers } from '../bookmarks/marker-detector';
 import { composeLabel } from '../identity/session-label';
 
@@ -230,9 +231,9 @@ function collectContentBlocks(events: any[], rawLines: string[]): ContentBlockIn
       continue;
     }
 
-    // Attachment events — hook_fire / skill_activation span outputs enter the
-    // ledger via stringifyContent(span.outputs ?? span.name ?? ''). Mirror
-    // that exactly so their tokens are costed.
+    // Attachment events — model.ts emits a ledger entry for EVERY attachment
+    // within a turn, using `span.outputs ?? span.name ?? ''`. We mirror that
+    // exactly so every ledger entry has a sourceLineHash entry in the map.
     if (evt.type === 'attachment') {
       const atype = evt?.attachment?.type;
       let contentStr = '';
@@ -246,10 +247,20 @@ function collectContentBlocks(events: any[], rawLines: string[]): ContentBlockIn
         });
       } else if (atype === 'skill_listing') {
         contentStr = stringifyToolResultContent(evt.attachment?.content);
+      } else {
+        // For all other attachment types (queued_command, task_reminder,
+        // deferred_tools_delta, auto_mode, …) model.ts falls back to
+        // `span.name` — the attachment.type string via classifyAttachment.
+        contentStr = typeof atype === 'string' ? atype : '';
       }
-      if (contentStr.length > 0) out.push({ content: contentStr, lineNumber });
+      // Always push (even empty string) so the redactMap has an entry for
+      // the exact content string model.ts will pass to tokenOf/redactOf.
+      out.push({ content: contentStr, lineNumber });
       continue;
     }
+
+    // system events — model.ts does NOT add a ledger entry for them (span has
+    // no turn context hook), so we can safely skip here too.
   }
 
   return out;
@@ -449,6 +460,9 @@ async function importSingleFile(
   const tokenMap = await precomputeTokens(uniqueContents, opts.apiKey);
 
   // 3. Pre-compute redactions (uses per-line source hash for sourceOffset).
+  //    Keyed by content string — the first source-line occurrence wins. That
+  //    keeps the assembler's `redactOf(content)` closure a pure-content lookup
+  //    and is enough to satisfy the `sourceLineHash` determinism contract.
   const redactMap = new Map<string, { redacted: string; sourceOffset?: LedgerSourceOffset }>();
   for (const { content, lineNumber } of blocks) {
     if (redactMap.has(content)) continue;
@@ -459,15 +473,14 @@ async function importSingleFile(
       start: 0,
       end: Math.min(contentBytes, lineBytes.length),
     });
-    redactMap.set(content, {
-      redacted: result.redacted,
-      sourceOffset: {
-        file,
-        byteStart: 0,
-        byteEnd: Math.min(contentBytes, lineBytes.length),
-        sourceLineHash: sourceLineHash(line),
-      },
-    });
+    const sourceOffset: LedgerSourceOffset = {
+      file,
+      byteStart: 0,
+      byteEnd: Math.min(contentBytes, lineBytes.length),
+      sourceLineHash: sourceLineHash(line),
+    };
+    if (lineNumber > 0) sourceOffset.line = lineNumber;
+    redactMap.set(content, { redacted: result.redacted, sourceOffset });
   }
 
   // 4. Assemble the session with sync lookups against our pre-computed maps.
@@ -475,6 +488,43 @@ async function importSingleFile(
     sourceFile: file,
     tokenOf: (c: string) => tokenMap.get(c) ?? 0,
     redactOf: (c: string) => redactMap.get(c) ?? { redacted: c },
+  });
+
+  // 4b. Join depth-1 subagent transcripts into the parent session so Agent
+  //     spans get populated childSpanIds + child spans are spliced in for
+  //     persistence. claudeProjectsDir is the directory that contains the
+  //     parent JSONL: the joiner will resolve
+  //       <claudeProjectsDir>/<parentSessionId>/subagents/agent-<agentId>.jsonl
+  const claudeProjectsDir = dirname(file);
+  joinSubagentsIntoSession({
+    session,
+    events,
+    claudeProjectsDir,
+    assemble: (childEvents: unknown[]) => {
+      // Child events are from a different JSONL file — their content strings
+      // won't all be in `tokenMap`. Count tokens for any unknown string via
+      // the offline tokenizer (synchronously falling back to char-estimate if
+      // the WASM module has not been loaded yet).
+      //
+      // `countTokensOffline` is async, but the assembler's `tokenOf` must be
+      // sync. We pre-compute here by probing every unique child content
+      // string against the SAME offline counter, awaited synchronously via a
+      // tiny cache: whatever isn't in the pre-computed map falls through to a
+      // char-estimate (`Math.ceil(s.length / 3.5)`) — good enough for child
+      // transcripts (A2 drift gate does not gate them).
+      const childTokenOf = (s: string): number => {
+        const cached = tokenMap.get(s);
+        if (cached !== undefined) return cached;
+        if (s.length === 0) return 0;
+        return Math.ceil(s.length / 3.5);
+      };
+      return assembleSession(childEvents as any[], {
+        sourceFile: 'subagent.jsonl',
+        tokenOf: childTokenOf,
+        // Reuse parent redact map when possible; else no redaction offset.
+        redactOf: (c: string) => redactMap.get(c) ?? { redacted: c },
+      });
+    },
   });
 
   // 5. Compute drift warnings for each subagent span with reported metadata.
