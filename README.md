@@ -1,20 +1,22 @@
 # Peek
 
-**A recorder for Claude Code sessions.** You mark an interval. Peek captures every tool call, every subagent, every API request inside it — with inputs and outputs expandable from the UI. Nothing leaves your laptop.
+**An observatory for Claude Code.** The single biggest determinant of useful work from an agent is *what entered context, in what order, at what cost*. Too much and it loses focus, output degrades. Too little and there's no guardrail. Peek shows you that composition — every file, skill, rule, memory, hook, tool call, and MCP call that entered context during an interval you marked. Listed. Tokenized. Drillable. Nothing leaves your laptop.
 
 ---
 
-## The problem
+## Why this exists
 
-You're forty turns deep into a Claude Code session. The agent spawned the orchestrator subagent. The orchestrator fired off eighteen tool calls — some Bash, a couple of API hops, a few file reads — and decided there were "multiple repos" and went exploring. Something in there burned 40k tokens you didn't expect.
+I spent a long time trying to find something that shows context composition in a human-digestible way. Nothing did.
 
-You press `Ctrl+O`. A wall of interleaved JSON scrolls by. The information is technically there. But it isn't navigable. You can't click a row. You can't compare two turns. You can't show it to a teammate without a screen-share and a lot of squinting.
+Anthropic's built-in telemetry is **span-oriented**: one row per API call or tool use. That answers "what did the agent do?" It does not answer "what did the agent's context look like when it made those decisions?"
 
-Telemetry gives totals. Logs give noise. What you actually want is the *story* of what the agent did: in order, expandable, with the exact bash command and its stdout right there.
+Peek is **artifact-oriented**: one row per artifact that entered context during your interval. Same underlying data, different view. When an agent spawns a subagent and pulls in six files, three skills, two MCP responses, and a batch of memories — Peek shows you all of that as a navigable list, with per-artifact token counts and expandable bodies.
 
-## What Peek does
+The beauty of Claude Code is you can just build what you need. So I did.
 
-You type `/peek_start fixing-auth`. You work normally. You type `/peek_end`. You refresh `http://127.0.0.1:7335` and see a timeline like this:
+## How it feels to use
+
+You type `/peek_start refactoring-auth`. You work normally. You type `/peek_end`. You refresh `http://127.0.0.1:7335` and see a view like this:
 
 ```
 22:04:04  👥  SUBAGENT  Agent: orchestrator                 18 children  ▾
@@ -29,9 +31,9 @@ You type `/peek_start fixing-auth`. You work normally. You type `/peek_end`. You
                    which one is "the current repository"…
 ```
 
-Click any row. The panel slides open with the real command string (`ls /Users/.../Code/work`), the captured stdout, and the token count. Subagents collapse into groups with accurate child counts. Lifecycle noise is hidden by default; one toggle reveals it.
+Click any row. The panel slides open with the real content — the file the agent read, the exact Bash command with full stdout, the MCP response body, the skill that was activated, the memory block that was injected. Subagents collapse into groups with accurate child counts; every artifact their sub-context pulled in is visible under the parent row. Lifecycle noise (permission-mode changes, file-history snapshots, etc.) is hidden by default; one click reveals it.
 
-Peek is a screen recorder for your agents, but structured: events, not pixels. When a session goes sideways, you share the recording instead of describing what happened.
+Peek is a **recorder by design** — you consciously turn it on with `/peek_start` and off with `/peek_end` — and an **observatory by output** — every artifact that was in-context during the interval is there, drillable, with tokens. Other Claude Code sessions on your machine stay invisible until you `/peek_start` inside them.
 
 ---
 
@@ -54,15 +56,25 @@ You should see:
 peek live on http://127.0.0.1:7335 (dataDir=~/.peek, watch=~/.claude/projects)
 ```
 
-Open Claude Code. Type `/peek_start my-topic`. Do work. Type `/peek_end`. Refresh `http://127.0.0.1:7335`.
+Open Claude Code. Type `/peek_start my-topic`. Work. Type `/peek_end`. Refresh `http://127.0.0.1:7335`.
 
-> **Heads up — known v0.3 limitation.** The recording picks the "current" Claude Code session by watching which JSONL was most recently appended. If you have multiple CC windows writing at the same time, a recording may briefly attribute to whichever one happened to blink last. For single-session workflows (almost everyone) this is invisible. If you're dogfooding Peek while debugging Peek in a second window — you'll want to close one or wait for v0.3.1, which makes the JSONL-side marker authoritative.
+> **Heads up — known v0.3 limitation.** The recording picks the "current" Claude Code session by watching which JSONL was most recently appended. If you have multiple CC windows writing at the same time, a recording may briefly attribute to whichever one happened to blink last. For single-session workflows (almost everyone) this is invisible. If you're dogfooding Peek while debugging Peek in a second window — close one or wait for v0.3.1, which makes the JSONL-side marker authoritative.
+
+### Using Peek with agents other than Claude Code
+
+The live watcher in v0.3 is Claude-Code-first — it indexes `~/.claude/projects/<slug>/<session>.jsonl` as its source of truth. Users of Cursor, OpenAI Codex, Cline, or any other agent that emits a JSONL-ish transcript can still use Peek in **import mode** today:
+
+```bash
+node dist/bin/peek.js import /path/to/your-agent-transcript.jsonl
+```
+
+That populates the legacy `/sessions` view. Live-watch support for other agent runtimes is tracked for v0.4+.
 
 ---
 
 ## The mental model
 
-**Only sessions you explicitly record show up.** If you never type `/peek_start`, Peek's landing page stays empty no matter how much Claude Code activity your machine sees. Peek is a recorder, not an observatory.
+**Only intervals you explicitly record show up.** If you never type `/peek_start`, Peek's landing page stays empty no matter how much Claude Code activity your machine sees. Peek does not passively vacuum your agent history. You turn it on when something matters.
 
 Three rules keep it sane:
 
@@ -72,7 +84,7 @@ Three rules keep it sane:
 
 ## Text-marker fallback
 
-Haven't installed the slash commands? Type markers inside your CC prompt:
+Haven't installed the slash commands? Type markers inside your prompt:
 
 ```
 @peek-start my-topic
@@ -80,13 +92,13 @@ Haven't installed the slash commands? Type markers inside your CC prompt:
 @peek-end
 ```
 
-The markers must be the *entire* prompt on their own. Inline usage (`"document the @peek-start flow"`) is deliberately ignored so your README diffs and your chat about Peek don't accidentally start recordings. Slash commands are the preferred flow; text markers are the fallback.
+The markers must be the *entire* prompt on their own. Inline usage (`"document the @peek-start flow"`) is deliberately ignored so your README diffs and your chat about Peek don't accidentally start recordings.
 
 ## What a recording does NOT include
 
 - Other Claude Code sessions you didn't `/peek_start`
 - Events in the same session from before `/peek_start` or after `/peek_end`
-- Claude Code lifecycle noise (`permission-mode`, `file-history-snapshot`, `turn_duration`, `last-prompt`, ~10 siblings) — hidden by default. Toggle "show internal events" on the detail page to see them.
+- Claude Code lifecycle chatter (`permission-mode`, `file-history-snapshot`, `turn_duration`, `last-prompt`, and ~10 siblings) — hidden by default. Toggle "show internal events" on the detail page to see them.
 
 ## Privacy
 
@@ -100,10 +112,10 @@ Peek binds to `127.0.0.1` only. No telemetry. No cloud. No login. Your recording
 
 | Command              | Purpose                                                                                                   |
 | -------------------- | --------------------------------------------------------------------------------------------------------- |
-| `peek`               | Start the recorder (HTTP + JSONL watcher) on `http://127.0.0.1:7335`. Equivalent to `peek serve`.         |
+| `peek`               | Start the observatory (HTTP + JSONL watcher) on `http://127.0.0.1:7335`. Equivalent to `peek serve`.      |
 | `peek serve`         | Same as `peek` with explicit flags. Watcher runs by default; pass `--no-watch` to disable. `--port`, `--data-dir`, `--claude-dir` override the defaults. |
-| `peek install`       | Copy `/peek_start` and `/peek_end` into `~/.claude/commands/`. `--force` overwrites. `--target <dir>` installs elsewhere (for testing). |
-| `peek import <path>` | One-shot import of a JSONL file or directory. Only populates the legacy `/sessions` view — recordings still require `/peek_start`. |
+| `peek install`       | Copy `/peek_start` and `/peek_end` into `~/.claude/commands/`. `--force` overwrites. `--target <dir>` installs elsewhere. |
+| `peek import <path>` | One-shot import of a JSONL file or directory. Populates the legacy `/sessions` view; recordings still require `/peek_start`. |
 
 ### Environment variables
 
@@ -124,7 +136,7 @@ Peek binds to `127.0.0.1` only. No telemetry. No cloud. No login. Your recording
 
 ### Routes
 
-- `/` — the recordings list (what you made with `/peek_start`)
+- `/` — the recordings list (intervals you marked with `/peek_start`)
 - `/recording/:id` — the full detail view for one recording
 - `/sessions` — legacy view of every imported Claude Code session (for `peek import` users)
 
@@ -143,7 +155,7 @@ Another process owns the port. Either stop it, or run `PEEK_PORT=7336 peek` — 
 Restart Claude Code. It scans `~/.claude/commands/` only on startup.
 
 **Recording stays empty**
-Check that `peek` was already running *before* you typed `/peek_start`. Events that were appended to the JSONL before the start marker are out of the recording window.
+Check that `peek` was already running *before* you typed `/peek_start`. Events appended to the JSONL before the start marker are out of the recording window.
 
 ---
 
