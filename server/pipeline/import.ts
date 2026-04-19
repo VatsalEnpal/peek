@@ -510,6 +510,20 @@ async function importSingleFile(
   //    Keyed by content string — the first source-line occurrence wins. That
   //    keeps the assembler's `redactOf(content)` closure a pure-content lookup
   //    and is enough to satisfy the `sourceLineHash` determinism contract.
+  //
+  //    Also compute each line's byte offset in the overall file so
+  //    `sourceOffset.byteStart` points INTO the correct source line — the
+  //    /api/unmask handler uses byteStart to locate the line it should
+  //    re-hash, and a value of 0 always resolved to line 1 regardless of
+  //    which line the ledger entry actually came from (v0.2 L5 TOCTOU fix).
+  const lineByteStarts: number[] = new Array(rawLines.length);
+  {
+    let cursor = 0;
+    for (let i = 0; i < rawLines.length; i++) {
+      lineByteStarts[i] = cursor;
+      cursor += Buffer.byteLength(rawLines[i], 'utf8') + 1; // +1 for the '\n'
+    }
+  }
   const redactMap = new Map<string, { redacted: string; sourceOffset?: LedgerSourceOffset }>();
   for (const { content, lineNumber } of blocks) {
     if (redactMap.has(content)) continue;
@@ -520,10 +534,12 @@ async function importSingleFile(
       start: 0,
       end: Math.min(contentBytes, lineBytes.length),
     });
+    const lineByteStart =
+      lineNumber > 0 && lineNumber - 1 < lineByteStarts.length ? lineByteStarts[lineNumber - 1] : 0;
     const sourceOffset: LedgerSourceOffset = {
       file,
-      byteStart: 0,
-      byteEnd: Math.min(contentBytes, lineBytes.length),
+      byteStart: lineByteStart,
+      byteEnd: lineByteStart + lineBytes.length,
       sourceLineHash: sourceLineHash(line),
     };
     if (lineNumber > 0) sourceOffset.line = lineNumber;
