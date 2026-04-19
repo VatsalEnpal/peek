@@ -44,6 +44,9 @@ export function Timeline(): ReactElement {
    * `tokensConsumed` (or `tokens`) field when present. Tool-call spans carry
    * this directly and have no ledger rows, so without the fallback every row
    * reads `—`.
+   *
+   * A resolved value of `0` is a valid number and renders as "0" (not "—").
+   * Only `null`/`undefined` renders as "—".
    */
   const tokensFor = (r: {
     id: string;
@@ -52,8 +55,8 @@ export function Timeline(): ReactElement {
   }): number | null => {
     const fromLedger = tokensBySpan.get(r.id);
     if (typeof fromLedger === 'number' && fromLedger > 0) return fromLedger;
-    const own = r.tokensConsumed ?? r.tokens;
-    if (typeof own === 'number' && own > 0) return own;
+    if (typeof r.tokensConsumed === 'number') return r.tokensConsumed;
+    if (typeof r.tokens === 'number') return r.tokens;
     return null;
   };
 

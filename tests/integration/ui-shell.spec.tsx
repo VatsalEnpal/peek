@@ -34,7 +34,7 @@ const EVENTS = [
     kind: 'span',
     id: 'span-user-1',
     sessionId: 'sess-1',
-    type: 'user',
+    type: 'user_prompt',
     name: 'debug the thing',
     startTs: '2026-04-18T09:00:01Z',
     durationMs: 12,
@@ -44,7 +44,7 @@ const EVENTS = [
     id: 'span-tool-1',
     sessionId: 'sess-1',
     parentSpanId: 'span-user-1',
-    type: 'tool',
+    type: 'tool_call',
     name: 'Read src/app.ts',
     startTs: '2026-04-18T09:00:02Z',
     durationMs: 41,
@@ -53,7 +53,7 @@ const EVENTS = [
     kind: 'span',
     id: 'span-file-1',
     sessionId: 'sess-1',
-    type: 'file',
+    type: 'memory_read',
     name: 'package.json',
     startTs: '2026-04-18T09:00:03Z',
     durationMs: 3,
@@ -146,7 +146,7 @@ describe('app shell', () => {
     // Root-level events only (file + user), not child tool span, until expanded.
     const userRow = rows.find((r) => r.getAttribute('data-span-id') === 'span-user-1');
     expect(userRow).toBeTruthy();
-    expect(userRow!.getAttribute('data-span-type')).toBe('user');
+    expect(userRow!.getAttribute('data-span-type')).toBe('user_prompt');
     expect(userRow!.textContent).toContain('debug the thing');
     // Cascade toggle exists because span-user-1 has a child span.
     const toggle = userRow!.querySelector('[data-testid="cascade-toggle"]');
@@ -165,10 +165,10 @@ describe('app shell', () => {
     // Unit-level checks against the stores without spinning up App — fast and
     // deterministic.
     const active = new Set(['prompts', 'tools']);
-    expect(spanVisible('user', active)).toBe(true);
-    expect(spanVisible('tool', active)).toBe(true);
-    expect(spanVisible('file', active)).toBe(false);
-    expect(spanVisible('thinking', active)).toBe(true); // not covered by any chip
+    expect(spanVisible('user_prompt', active)).toBe(true);
+    expect(spanVisible('tool_call', active)).toBe(true);
+    expect(spanVisible('memory_read', active)).toBe(false);
+    expect(spanVisible('unknown', active)).toBe(true); // not covered by any chip
 
     // buildTimelineRows: root-only when collapsed, includes child when expanded.
     const rows = buildTimelineRows(
